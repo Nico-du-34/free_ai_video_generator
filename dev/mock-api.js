@@ -39,6 +39,7 @@ http.createServer((req, res) => {
   req.on('end', () => {
     const j = (() => { try { return JSON.parse(body); } catch { return {}; } })();
     res.setHeader('content-type', 'application/json');
+    res.setHeader('x-ratelimit-limit-requests', '100'); res.setHeader('x-ratelimit-remaining-requests', String(Math.max(0, 100 - n))); res.setHeader('x-ratelimit-reset-requests', '20s');
     if (!/translate_tts|\/files\/|\/search\/text\/|\/tracks\//.test(req.url) && !/Bearer .+/.test(req.headers.authorization || '')) { res.statusCode = 401; return res.end('{"error":{"message":"no key"}}'); }
     if (/translate_tts/.test(req.url)) { console.log('tts google', decodeURIComponent(req.url).slice(0, 90)); res.setHeader('content-type', 'audio/mpeg'); return res.end(tone(300, 2)); }
     if (/\/audio\/speech/.test(req.url)) { console.log('tts openai', body.slice(0, 80)); res.setHeader('content-type', 'audio/mpeg'); return res.end(tone(350, 3)); }
@@ -47,7 +48,11 @@ http.createServer((req, res) => {
     if (/\/tracks\//.test(req.url)) { console.log('jamendo search', req.url.slice(0, 80)); return res.end(JSON.stringify({ results: [{ audio: 'http://127.0.0.1:9099/files/amb.mp3' }] })); }
     if (/\/files\/amb\.mp3/.test(req.url)) { res.setHeader('content-type', 'audio/mpeg'); return res.end(tone(120, 5)); }
     if (/\/v1\/models$/.test(req.url)) return res.end(JSON.stringify({ data: ['agnes-image-2.1-flash', 'agnes-2.5-flash', 'flux', 'kontext', 'gpt-image-1', 'openai-fast'].map((id) => ({ id })) }));
-    if (/\/account\/balance/.test(req.url)) return res.end(JSON.stringify({ balance: 42.5, currency: 'pollen' }));
+    if (/\/account\/balance/.test(req.url)) return res.end(JSON.stringify({ balance: 42.5, accountBalance: { total: 120, tier: 'seed', paid: 0 } }));
+    if (/\/account\/key\/usage/.test(req.url)) return res.end(JSON.stringify(Array.from({ length: 9 }, (_, i) => ({ timestamp: new Date(Date.now() - (i % 3) * 864e5).toISOString(), model: i % 2 ? 'flux' : 'kontext', cost_usd: 0.002 }))));
+    if (/\/account\/key$/.test(req.url)) return res.end(JSON.stringify({ valid: true, type: 'secret', name: 'ma-cle', pollenBudget: 50, expiresAt: null, permissions: ['generate', 'account:usage'], rateLimitEnabled: true }));
+    if (/\/account\/profile/.test(req.url)) return res.end(JSON.stringify({ githubUsername: 'tester', name: 'Test', email: 'secret@example.com' }));
+    if (/\/v1\/credits$/.test(req.url)) return res.end(JSON.stringify({ balance: 7, currency: 'credits' }));
     if (/tokens\/verify/.test(req.url)) return res.end(JSON.stringify({ success: true, result: { status: 'active', expires_on: '2027-01-01T00:00:00Z' } }));
     if (/whoami-v2/.test(req.url)) return res.end(JSON.stringify({ name: 'tester', type: 'user', isPro: false }));
     const edits = req.url.endsWith('/images/edits');

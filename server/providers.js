@@ -53,6 +53,7 @@ async function call(pid, url, { json, form, kind = 'image' }, signal) {
   }
   const buf = Buffer.from(await res.arrayBuffer());
   const type = res.headers.get('content-type') || '';
+  usage.noteHeaders(pid, res.headers);
   if (!res.ok) {
     if (res.status === 429) cool.set(pid, Date.now() + 120000);
     const text = buf.toString('utf8', 0, 600);

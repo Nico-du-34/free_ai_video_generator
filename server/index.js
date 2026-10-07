@@ -79,7 +79,9 @@ async function api(req, res, url) {
   }
   if (p === '/api/usage/check' && m === 'POST') {
     const b = await readJson(req);
-    return send(res, 200, b.service ? await usage.checkService(String(b.service)) : await usage.checkProvider(String(b.provider)));
+    if (b.service) return send(res, 200, await usage.checkService(String(b.service)));
+    const [c] = await Promise.all([usage.checkProvider(String(b.provider)), usage.refreshAccount(String(b.provider)).catch(() => null)]);
+    return send(res, 200, c);
   }
   if (p === '/api/usage/reset' && m === 'POST') { usage.reset(); return send(res, 200, { ok: true }); }
   if (p === '/api/settings' && m === 'PUT') { store.updateSettings(await readJson(req)); return send(res, 200, store.publicSettings()); }

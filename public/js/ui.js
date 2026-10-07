@@ -518,6 +518,29 @@ function checkHtml(c, pid) {
       <input type="text" data-mf="${pid}" placeholder="Filtrer (ex : flux, image, kontext)" value="${esc(modelFilter[pid] || '')}" style="margin-top:8px">
       <div class="models" id="ml-${pid}">${modelRows(pid)}</div><p class="fine">Clique sur un rôle pour définir ce modèle comme modèle image, avec références ou texte.</p></details>` : ''}</div>`;
 }
+
+function acctHtml(p) {
+  const a = p.account, lim = p.live;
+  let h = '';
+  if (lim || a || p.limitsNote) {
+    h += '<div class="chk"><div class="uc-head" style="align-items:center"><b style="font-size:13px">Valeurs réelles du fournisseur</b>' + (a ? `<span class="fine" style="margin:0">compte lu ${ago(a.at)}</span>` : '') + '</div>';
+    if (lim && lim.parsed.length) h += lim.parsed.map((x) => meter(`Quota annoncé · ${esc(x.name)}${x.reset ? ' · remise à zéro dans ' + esc(x.reset) : ''}`, x.limit - x.remaining, x.limit, `${x.remaining} restant(s) / ${x.limit}`)).join('');
+    else if (lim) h += '<p class="fine" style="margin:6px 0 0">Le fournisseur renvoie des en-têtes de quota mais sans paire limite/restant exploitable.</p>';
+    else h += '<p class="fine" style="margin:6px 0 0">Aucun en-tête de quota reçu pour l\'instant (il apparaît après le premier appel).</p>';
+    if (lim) h += `<details style="margin-top:8px"><summary style="margin:0;font-size:12px">En-têtes bruts reçus (${ago(lim.at)})</summary><dl class="kv">${Object.entries(lim.headers).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></details>`;
+    if (a && a.error) h += `<div class="lasterr" style="margin-top:8px">${esc(a.error)}</div>`;
+    const kv = a ? Object.entries(a.kv) : [];
+    if (kv.length) h += `<dl class="kv">${kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+    if (a && a.models && a.models.length) h += `<table class="utable" style="margin-top:8px"><thead><tr><th>Modèle (côté fournisseur)</th><th>Requêtes</th><th>Coût (USD)</th></tr></thead><tbody>${a.models.map((m) => `<tr><td>${esc(m.model)}</td><td>${m.requests}</td><td>${m.cost}</td></tr>`).join('')}</tbody></table>`;
+    if (a && a.series) h += `<div style="margin-top:10px"><div class="fine" style="margin:0 0 4px">${esc(a.seriesLabel)}</div>${spark(a.series)}</div>`;
+    if (a) h += a.notes.map((n) => `<p class="fine" style="margin:8px 0 0">${esc(n)}</p>`).join('');
+    if (p.limitsNote) h += `<p class="fine" style="margin:8px 0 0">${esc(p.limitsNote)}</p>`;
+    if (!a && p.hasKey) h += '<p class="fine" style="margin:8px 0 0">Lecture du compte en cours…</p>';
+    if (p.dashUrl) h += `<p style="margin:8px 0 0"><a href="${esc(p.dashUrl)}" target="_blank" rel="noopener" style="font-size:12px">Ouvrir le tableau de bord du fournisseur →</a></p>`;
+    h += '</div>';
+  }
+  return h;
+}
 function provCard(p) {
   const t = p.today, q = p.quota;
   const lat = p.latencyMs ? (p.latencyMs / 1000).toFixed(1) + ' s' : '—';
@@ -534,8 +557,9 @@ function provCard(p) {
     <div class="fine" style="margin:0">7 jours : ${p.week.ok} réussis · ${p.week.err} erreurs · latence image ~${lat} · dernier appel ${ago(p.last && p.last.at)}</div>
     ${spark(p.series)}
     ${p.last && p.last.err ? `<div class="lasterr"><b>Dernière erreur</b> (${ago(p.last.err.at)}${p.last.err.status ? ', HTTP ' + p.last.err.status : ''}) : ${esc(p.last.err.msg)}</div>` : ''}
+    ${acctHtml(p)}
     ${checkHtml(p.check, p.id)}
-    <div class="actions tight" style="margin-top:0"><button class="btn sm" data-act="usageCheck" data-pid="${p.id}" ${p.hasKey ? '' : 'disabled'}>${ico('refresh')}Vérifier la clé et le compte</button><button class="btn sm ghost" data-go="settings">Configurer</button></div>
+    <div class="actions tight" style="margin-top:0"><button class="btn sm" data-act="usageCheck" data-pid="${p.id}" ${p.hasKey ? '' : 'disabled'}>${ico('refresh')}Actualiser : clé, compte et modèles</button><button class="btn sm ghost" data-go="settings">Configurer</button></div>
   </div>`;
 }
 function renderUsage() {
@@ -566,7 +590,7 @@ function renderUsage() {
 async function loadUsage(force) {
   try {
     const d = await api('GET', '/api/usage');
-    const k = JSON.stringify(d.events) + JSON.stringify(d.providers.map((p) => [p.quota, p.today, p.check, p.last])) + JSON.stringify(d.services) + JSON.stringify(d.totals) + JSON.stringify(d.storage) + JSON.stringify(d.jobs);
+    const k = JSON.stringify(d.events) + JSON.stringify(d.providers.map((p) => [p.quota, p.today, p.check, p.last, p.account && p.account.at, p.live && p.live.at])) + JSON.stringify(d.services) + JSON.stringify(d.totals) + JSON.stringify(d.storage) + JSON.stringify(d.jobs);
     usageData = d;
     // pas de re-rendu pendant la saisie / quand un panneau est ouvert et rien n'a changé
     if (force || (k !== usageKey && !$('#usageBody').contains(document.activeElement))) { const open = $$('#usageBody details[open]').map((x) => x.closest('.uc') ? x.closest('.uc').dataset.pid : 'svc'); renderUsage(); open.forEach((pid) => { const el = $(`#usageBody .uc[data-pid="${pid}"] details`); if (el) el.open = true; }); }

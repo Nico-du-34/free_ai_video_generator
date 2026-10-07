@@ -35,6 +35,8 @@ const DEFAULTS = {
       imageModel: 'agnes-image-2.1-flash', editModel: '', chatModel: 'agnes-2.5-flash',
       rpm: 15, dailyLimit: 4000, refMode: 'field', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '',
       keyUrl: 'https://platform.agnes-ai.com',
+      account: 'probe', dashUrl: 'https://platform.agnes-ai.com',
+      limitsNote: 'Limites officielles (référence) : 20 images/min en 1K, 10 en 2K, 1 en 3K et 4K · 4 000 images par jour. Aucun endpoint de solde n\'est documenté par Agnes.',
       help: 'Texte → image et références. Clé gratuite à la création du compte.',
     },
     pollinations: {
@@ -42,6 +44,7 @@ const DEFAULTS = {
       imageModel: '', editModel: 'kontext', chatModel: 'openai-fast',
       rpm: 10, refMode: 'edits', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '',
       keyUrl: 'https://enter.pollinations.ai',
+      account: 'pollinations', dashUrl: 'https://enter.pollinations.ai',
       help: 'Références via /images/edits. Les noms de modèles évoluent : ajuste-les si besoin.',
     },
     together: {
@@ -49,6 +52,8 @@ const DEFAULTS = {
       imageModel: 'black-forest-labs/FLUX.1-schnell-Free', editModel: '', chatModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',
       rpm: 6, refMode: 'none', refField: 'image', refArray: true, sizeMode: 'wh', extraBody: '{"steps":4}',
       keyUrl: 'https://api.together.ai/settings/api-keys',
+      account: 'none', dashUrl: 'https://api.together.ai/settings/billing',
+      limitsNote: 'Together n\'expose pas de solde par API : les quotas annoncés sont lus dans les en-têtes de réponse (x-ratelimit-*).',
       help: 'FLUX.1 schnell gratuit (très rapide). Texte → image uniquement : pas de références, images indépendantes.',
     },
     cloudflare: {
@@ -56,6 +61,8 @@ const DEFAULTS = {
       imageModel: '@cf/black-forest-labs/flux-1-schnell', editModel: '', chatModel: '',
       rpm: 20, refMode: 'none', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '{"steps":4}',
       keyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+      account: 'cloudflare', dashUrl: 'https://dash.cloudflare.com/?to=/:account/ai/workers-ai',
+      limitsNote: 'La consommation Workers AI (neurons) se consulte sur le tableau de bord Cloudflare : elle n\'est pas lisible avec un simple token.',
       help: 'Remplace VOTRE_ACCOUNT_ID dans l\'URL (Avancé) et crée un token « Workers AI ». Quota gratuit quotidien. Texte → image uniquement.',
     },
     huggingface: {
@@ -63,6 +70,7 @@ const DEFAULTS = {
       imageModel: 'black-forest-labs/FLUX.1-schnell', editModel: '', chatModel: '',
       rpm: 10, refMode: 'none', refField: 'image', refArray: true, sizeMode: 'wh', extraBody: '',
       keyUrl: 'https://huggingface.co/settings/tokens',
+      account: 'hf', dashUrl: 'https://huggingface.co/settings/billing',
       help: 'Crédits gratuits mensuels. Token avec droit « Inference Providers ». Texte → image uniquement.',
     },
     custom: {
@@ -70,6 +78,7 @@ const DEFAULTS = {
       imageModel: '', editModel: '', chatModel: '',
       rpm: 10, refMode: 'field', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '',
       keyUrl: 'https://github.com/public-apis/public-apis#machine-learning',
+      account: 'probe', dashUrl: '',
       help: 'Tout service exposant /images/generations (et /chat/completions pour l\'enrichissement).',
     },
   },
