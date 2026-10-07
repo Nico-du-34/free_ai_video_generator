@@ -139,4 +139,19 @@ async function joinSegments(files, trans, fps, outFile, onProgress) {
   return starts;
 }
 
-module.exports = { joinSegments, lastFrame, encodeClips, encodeSlides, ffmpeg, toPng, toJpeg, encodeVideo, duration, toMp3 };
+const pngSize = (b) => ({ w: b.readUInt32BE(16), h: b.readUInt32BE(20) });
+/** Déforme (zoom + translation, bords miroir) une image PNG et la renvoie en JPEG ≤ 640 px : référence « déjà en mouvement » pour l'image suivante. */
+async function warpFrame(buf, { z = 1, dx = 0, dy = 0 }) {
+  const src = pngSize(buf), sc = 640 / Math.max(src.w, src.h);
+  const w = Math.max(2, Math.round((src.w * Math.min(1, sc)) / 2) * 2), h = Math.max(2, Math.round((src.h * Math.min(1, sc)) / 2) * 2);
+  const P = Math.round(0.3 * Math.max(w, h)) & ~1;
+  const cw = Math.max(2, Math.round(w / z / 2) * 2), ch = Math.max(2, Math.round(h / z / 2) * 2);
+  const clampv = (v, a, b) => Math.min(b, Math.max(a, v));
+  const x = clampv(Math.round(P + (w - cw) / 2 + dx), 0, w + 2 * P - cw), y = clampv(Math.round(P + (h - ch) / 2 + dy), 0, h + 2 * P - ch);
+  const vf = `scale=${w}:${h},pad=${w + 2 * P}:${h + 2 * P}:${P}:${P},fillborders=left=${P}:right=${P}:top=${P}:bottom=${P}:mode=mirror,crop=${cw}:${ch}:${x}:${y},scale=${w}:${h}:flags=lanczos`;
+  const out = await ffmpeg(['-i', 'pipe:0', '-frames:v', '1', '-vf', vf, '-pix_fmt', 'yuvj420p', '-q:v', '3', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1'], { input: buf });
+  if (!out.length) throw new Error('déformation impossible');
+  return out;
+}
+
+module.exports = { warpFrame, joinSegments, lastFrame, encodeClips, encodeSlides, ffmpeg, toPng, toJpeg, encodeVideo, duration, toMp3 };

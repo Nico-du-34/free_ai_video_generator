@@ -55,6 +55,28 @@ const FILTERS = {
   night: 'colorbalance=rs=-.1:bs=.15:rm=-.05:bm=.1,eq=brightness=-0.06:saturation=0.9',
   posterize: 'eq=saturation=1.5:contrast=1.3,lutyuv=y=floor(val/32)*32',
 };
+/** Déformation à appliquer à l'image précédente pour obtenir la suivante (technique Deforum) : la caméra est « cuite » dans la génération.
+ *  gap = nombre d'images vidéo entre la référence et l'image à générer ; k/N = position dans la scène. Retourne null si aucun mouvement. */
+function warpStep(cam, N, w, h, k, gap) {
+  if (!cam || isShake(cam)) return null;
+  const g = gap / N, p = N > 1 ? k / N : 0, PI = Math.PI;
+  switch (cam) {
+    case 'push': return { z: 1.25 ** g, dx: 0, dy: 0 };
+    case 'pull': return { z: 1.25 ** -g, dx: 0, dy: 0 };
+    case 'panr': return { z: 1, dx: 0.2 * w * g, dy: 0 };
+    case 'panl': return { z: 1, dx: -0.2 * w * g, dy: 0 };
+    case 'tiltup': return { z: 1, dx: 0, dy: -0.2 * h * g };
+    case 'tiltdown': return { z: 1, dx: 0, dy: 0.2 * h * g };
+    case 'crane': return { z: 1.2 ** -g, dx: 0, dy: -0.15 * h * g };
+    case 'drone': return { z: 1.3 ** -g, dx: 0, dy: -0.1 * h * g };
+    case 'orbit': return { z: 1, dx: 0.3 * w * g * (PI / 2) * Math.sin(PI * p), dy: 0 };
+    case 'whip': return { z: 1, dx: p < 0.2 ? 0.3 * w * (gap / (0.2 * N)) : 0, dy: 0 };
+    case 'dolly': return { z: 1.5 ** g, dx: 0, dy: 0 };
+    case 'steadi': return { z: 1, dx: 0.08 * w * g, dy: 0 };
+    case 'parallax': return { z: 1, dx: 0.12 * w * g * (PI / 2) * Math.sin(PI * p), dy: 0 };
+    default: return null;
+  }
+}
 const filterVf = (id) => FILTERS[id] || '';
 const TRANS = new Set(['fade', 'dissolve', 'fadeblack', 'fadewhite', 'pixelize', 'slideleft', 'zoomin', 'circleopen', 'radial', 'wipeleft', 'hblur', 'hlslice', 'squeezeh', 'smoothleft']);
-module.exports = { CAMS, camFilter, camSlide, filterVf, FILTERS, TRANS, isShake };
+module.exports = { warpStep, CAMS, camFilter, camSlide, filterVf, FILTERS, TRANS, isShake };

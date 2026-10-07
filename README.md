@@ -20,6 +20,7 @@ Un catalogue de **223 effets** en 5 emplacements, combinables par scène (ou glo
 - **Filtre** (16), appliqué par ffmpeg : VHS, glitch, sépia, noir, néons, pixel art, thermique, hologramme, teal & orange…
 - **Transition** (15) entre scènes : jump cut, smash cut, flash, glitch, whip pan, zoom, iris, fondus…
 - **Style visuel** (83) : animation, genres de cinéma, univers (cyberpunk, steampunk…), époques, mouvements artistiques, illusions, clips musicaux, business.
+**Caméra intégrée à la génération (technique Deforum)** : en mode image par image chaîné, l'image précédente est déformée selon la caméra choisie (zoom, travelling, tilt, grue, orbite…, bords en miroir) avant d'être envoyée comme référence, donc l'IA ne fait que retoucher une image déjà en mouvement au lieu d'en inventer une nouvelle. C'est ce qui donne un mouvement continu et cohérent ; sans caméra, chaque image repart de la précédente telle quelle. (Case à décocher dans le mode Avancé.)
 En mode image par image, les images sont en plus lissées (anti-scintillement) et la caméra/le filtre sont posés sur la séquence. Pour les types « Vidéo IA » et « Images animées », le mouvement est envoyé comme texte ou devient les images clés.
 
 ## Trois types de génération

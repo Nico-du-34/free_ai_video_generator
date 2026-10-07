@@ -536,7 +536,7 @@ document.addEventListener('click', (e) => { const b = e.target.closest('#pickCat
 function renderFx() {
   if (!catalog.length) return;
   $('#fxGlobal').innerHTML = fxRowHtml(draft.fx, 'global');
-  $('#fxHint').textContent = draft.engine === 'video' ? 'Avec le type « Vidéo IA », le mouvement est envoyé au modèle comme texte ; caméra, filtre et transition sont appliqués par ffmpeg.' : draft.engine === 'frames' ? 'Image par image : le mouvement chorégraphie chaque image, la caméra et le filtre sont appliqués ensuite par ffmpeg.' : 'Images animées : les instants clés du mouvement deviennent les images clés.';
+  $('#fxHint').textContent = draft.engine === 'video' ? 'Avec le type « Vidéo IA », le mouvement est envoyé au modèle comme texte ; caméra, filtre et transition sont appliqués par ffmpeg.' : draft.engine === 'frames' ? 'Image par image : le mouvement chorégraphie les images. Garde une caméra : elle est intégrée à la génération (chaque image part de la précédente déformée), ce qui donne un vrai mouvement continu ; le filtre est posé ensuite.' : 'Images animées : les instants clés du mouvement deviennent les images clés.';
   $$('.scene').forEach((el) => { const i = +el.dataset.i; const h = $('.fxscene', el); if (h) h.innerHTML = `<label style="margin-bottom:4px">Effets de cette scène <span class="opt">remplacent les effets globaux</span></label>${fxRowHtml(draft.scenes[i].fx, String(i), draft.fx)}`; });
 }
 

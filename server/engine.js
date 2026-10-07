@@ -131,7 +131,7 @@ function createJob(spec) {
   if (engine === 'video' && !pcfg.videoKind) throw httpError(400, `${pcfg.label} ne propose pas de génération vidéo : choisis Agnes ou Pollinations, ou le type « Images animées »`);
   const noRefs = pcfg.refMode === 'none' && engine !== 'video';
   const job = {
-    fx: normFx(spec.fx), engine, clipSec: clamp(+pcfg.videoMaxClip || 5, 2, 30), slideSec: clamp(+spec.slideSec || 3, 1.5, 10), clips: [],
+    warp: engine === 'frames' && spec.warp !== false, fx: normFx(spec.fx), engine, clipSec: clamp(+pcfg.videoMaxClip || 5, 2, 30), slideSec: clamp(+spec.slideSec || 3, 1.5, 10), clips: [],
     id: 'j_' + uid(), title: str(spec.title, 120).trim() || 'Vidéo', provider, createdAt: Date.now(), status: 'paused',
     fps: engine === 'video' ? clamp(+pcfg.videoFps || 24, 12, 60) : engine === 'slides' ? clamp(Math.round(+spec.fps) || 24, 12, 60) : clamp(Math.round(+spec.fps) || 12, 12, 60), size,
     mode: noRefs ? 'none' : engine === 'video' ? (pcfg.videoKind === 'pollinations' && !process.env.PUBLIC_URL ? 'none' : 'chain') : MODES.includes(spec.mode) ? spec.mode : 'chain',
@@ -339,7 +339,18 @@ class Runner {
     const refs = [];
     const fromFrame = (k) => this.cached('f' + k, async () => media.toJpeg(await fsp.readFile(framePath(job.id, k)), 640));
     const pg = this.prevGen(i);
-    if (job.mode === 'chain' && pg >= 0) refs.push(await fromFrame(pg));
+    if (job.mode === 'chain' && pg >= 0) {
+      const cam = fxOf(job, scene).camera;
+      let w = null;
+      if (job.warp && cam) {        // technique Deforum : l'image précédente est déformée selon la caméra, l'IA ne fait que la retoucher
+        try {
+          const png = await fsp.readFile(framePath(job.id, pg)), sz = { w: png.readUInt32BE(16), h: png.readUInt32BE(20) };
+          w = fxlib.warpStep(cam.cam, f.n, sz.w, sz.h, f.k, i - pg);
+          if (w) refs.push(await media.warpFrame(png, w));
+        } catch (e) { w = null; log(job, 'warn', 'Déformation ignorée : ' + e.message); }
+      }
+      if (!w) refs.push(await fromFrame(pg));
+    }
     else if (job.mode === 'anchor' && f.k > 0) refs.push(await fromFrame(this.firstIdx(f.si)));
     for (const id of [...scene.refs, ...job.globalRefs]) {
       try { refs.push(await this.cached(id, () => fsp.readFile(assetPath(id)))); } catch { /* référence supprimée : ignorée */ }
@@ -479,7 +490,8 @@ async function assemble(job) {
           }
           const it = gen.length < nOut;
           interp = interp || it;
-          const pre = [nOut >= 6 ? 'deflicker=mode=pm:size=5' : '', fx.camera ? fxlib.camFilter(fx.camera.cam, nOut, W, H, job.fps) : '', filt].filter(Boolean);
+          const baked = job.warp && job.mode === 'chain' && fx.camera && !fxlib.isShake(fx.camera.cam);   // déjà intégrée à la génération
+          const pre = [nOut >= 6 ? 'deflicker=mode=pm:size=5' : '', fx.camera && !baked ? fxlib.camFilter(fx.camera.cam, nOut, W, H, job.fps) : '', filt].filter(Boolean);
           await media.encodeVideo(path.join(dir, '%05d.png'), { inFps: it ? job.fps * gen.length / nOut : job.fps, outFps: job.fps, interp: it ? INTERP : null, pre }, seg, nOut, onSeg);
         }
         segs.push(seg); segScene.push(si);
