@@ -73,6 +73,7 @@ async function api(req, res, url) {
     return send(res, 200, { jobs: engine.list(), settings: store.publicSettings(), latency: store.stats.latency, time: Date.now(),
       usageToday: Object.fromEntries(Object.keys(ps).map((id) => [id, { videoSec: usage.videoSecToday(id), images: usage.imagesToday(id) }])) });
   }
+  if (p === '/api/effects' && m === 'GET') return send(res, 200, { effects: require('./effects-data').EFFECTS.map(({ slot, cat, id, name, desc, beats }) => ({ slot, cat, id, name, desc, beats: beats ? beats.length : 0 })) });
   if (p === '/api/usage' && m === 'GET') {
     const o = await usage.overview(providers.quotaState);
     const js = engine.list();

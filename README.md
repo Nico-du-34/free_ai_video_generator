@@ -13,6 +13,15 @@ docker compose up -d --build
 
 Sans Docker : Node ≥ 22 + ffmpeg, puis `npm start`.
 
+## Effets & mouvements (génération image par image chorégraphiée)
+Un catalogue de **223 effets** en 5 emplacements, combinables par scène (ou globalement) :
+- **Mouvement** (94) : combat (kung-fu, karaté, samouraï, ninja, Matrix…), danse (hip-hop, ballet, K-pop…), pouvoirs, catastrophes, sport, véhicules, émotions, fantastique, gaming. Chaque mouvement est une **séquence d'instants clés** (garde → saut → impact → retombée) répartie sur les images de la scène : chaque image reçoit le bon instant (et la transition entre deux instants) dans son prompt, chaînée à l'image précédente.
+- **Caméra** (15), appliquée par ffmpeg : push-in, pull-out, travelling, tilt, grue, drone, orbite, whip pan, épaule, POV…
+- **Filtre** (16), appliqué par ffmpeg : VHS, glitch, sépia, noir, néons, pixel art, thermique, hologramme, teal & orange…
+- **Transition** (15) entre scènes : jump cut, smash cut, flash, glitch, whip pan, zoom, iris, fondus…
+- **Style visuel** (83) : animation, genres de cinéma, univers (cyberpunk, steampunk…), époques, mouvements artistiques, illusions, clips musicaux, business.
+En mode image par image, les images sont en plus lissées (anti-scintillement) et la caméra/le filtre sont posés sur la séquence. Pour les types « Vidéo IA » et « Images animées », le mouvement est envoyé comme texte ou devient les images clés.
+
 ## Trois types de génération
 - **🎬 Vidéo IA (par défaut quand disponible)** : un vrai modèle vidéo génère des clips avec du vrai mouvement (Agnes `agnes-video-v2.0` via `/v1/videos` + suivi asynchrone, Pollinations `/video/…`). Les clips d'une même scène s'enchaînent (dernière image du clip précédent = image de départ du suivant), puis ffmpeg les assemble, recadre et fige si un clip est trop court. Quota gratuit Agnes : 1 clip/minute et 500 s de vidéo/jour (suivi dans *Usage & IA*).
 - **🖼 Images animées** : peu d'images clés générées par n'importe quelle IA (Together, Cloudflare, Hugging Face…), animées par zoom, panoramique et fondus enchaînés. Rapide, très fluide, mouvement de caméra uniquement.

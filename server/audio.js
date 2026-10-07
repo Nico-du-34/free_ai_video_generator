@@ -166,8 +166,9 @@ async function prepare(job, dir, signal) {
   const res = { voices: [], ambient: null };
   if (hasVoice(job)) {
     let t0 = 0;
-    for (const s of job.scenes) {
+    for (const [si, s] of job.scenes.entries()) {
       const dur = s.duration;
+      if (job.sceneStarts && job.sceneStarts[si] !== undefined) t0 = job.sceneStarts[si];
       if (s.narration && s.narration.trim()) {
         const file = await voiceFile(dir, job.audio.voice, s.narration.trim(), signal);
         res.voices.push({ file, start: t0, dur, len: await media.duration(file) });
@@ -183,7 +184,7 @@ async function prepare(job, dir, signal) {
 async function mix(job, dir, silent, outFile, signal) {
   const prep = await prepare(job, dir, signal);
   if (!prep) throw new Error('pas d\'audio à mixer');
-  const T = job.scenes.reduce((a, x) => a + x.duration, 0);
+  const T = await media.duration(silent).catch(() => job.scenes.reduce((a, x) => a + x.duration, 0));
   const a = job.audio;
   const args = ['-y', '-i', silent];
   const fc = [];

@@ -22,13 +22,16 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem('afvg.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('afvg.' + k, JSON.stringify(v)); return true; } catch { toast('Stockage local plein ou indisponible', 'err'); return false; } },
 };
-const newScene = (n = 1) => ({ id: uid(), libId: null, name: 'Scène ' + n, prompt: '', promptOriginal: '', motion: '', endPrompt: '', duration: 3, refs: [], narration: '' });
+const newScene = (n = 1) => ({ id: uid(), libId: null, name: 'Scène ' + n, prompt: '', promptOriginal: '', motion: '', endPrompt: '', duration: 3, refs: [], narration: '', fx: { motion: '', camera: '', filter: '', trans: '', style: '' } });
 const newAudio = () => ({ voice: { engine: 'google', lang: 'fr', speed: 1, volume: 1 }, ambient: { kind: 'none', preset: 'rain', query: '', volume: 0.3 }, duck: true });
-const newDraft = () => ({ engine: 'slides', engineChosen: false, slideSec: 3, audio: newAudio(), title: 'Ma vidéo', provider: '', fps: 12, size: '1024x576', mode: 'chain', concurrency: 2, keyEvery: 1, res: 'std', style: '', enrichAuto: true, simple: true, globalRefs: [], scenes: [newScene()] });
+const newDraft = () => ({ fx: { motion: '', camera: '', filter: '', trans: '', style: '' }, engine: 'frames', engineChosen: false, slideSec: 3, audio: newAudio(), title: 'Ma vidéo', provider: '', fps: 12, size: '1024x576', mode: 'chain', concurrency: 2, keyEvery: 1, res: 'std', style: '', enrichAuto: true, simple: true, globalRefs: [], scenes: [newScene()] });
 let draft = Object.assign(newDraft(), LS.get('draft', {}));
 if (!Array.isArray(draft.scenes) || !draft.scenes.length) draft.scenes = [newScene()];
-draft.scenes.forEach((s) => { if (typeof s.narration !== 'string') s.narration = ''; });
+draft.scenes.forEach((s) => { if (typeof s.narration !== 'string') s.narration = ''; s.fx = { motion: '', camera: '', filter: '', trans: '', style: '', ...(s.fx || {}) }; });
+draft.fx = { motion: '', camera: '', filter: '', trans: '', style: '', ...(draft.fx || {}) };
 draft.audio = { ...newAudio(), ...draft.audio, voice: { ...newAudio().voice, ...(draft.audio || {}).voice }, ambient: { ...newAudio().ambient, ...(draft.audio || {}).ambient } };
+const EMPTY_FX = { motion: '', camera: '', filter: '', trans: '', style: '' };
+const ensureScene = (sc) => { sc.fx = { ...EMPTY_FX, ...(sc.fx || {}) }; if (typeof sc.narration !== 'string') sc.narration = ''; return sc; };
 let library = LS.get('library', []);
 let _t;
 const saveDraft = () => { clearTimeout(_t); _t = setTimeout(() => LS.set('draft', draft), 300); };

@@ -58,8 +58,6 @@ function ensureProvider() {
   const ps = providers();
   if (!ps[draft.provider]) draft.provider = (server.settings && server.settings.defaultProvider) || Object.keys(ps)[0] || '';
   if (draft.engine === 'video' && !hasVideo(draft.provider)) draft.engine = 'slides';
-  if (!draft.engineChosen && hasVideo(draft.provider)) draft.engine = 'video';       // par défaut : vrai moteur vidéo quand il existe
-  if (!draft.engineChosen && !hasVideo(draft.provider)) draft.engine = 'slides';
 }
 const sceneLabel = (s) => (draft.engine === 'frames' ? sceneFrames(s) + ' images' : draft.engine === 'video' ? Math.max(1, Math.ceil(s.duration / ((providers()[draft.provider] || {}).videoMaxClip || 5) - 1e-9)) + ' clip(s)' : Math.max(1, Math.ceil(s.duration / (+draft.slideSec || 3) - 1e-9)) + ' image(s) clés');
 const sceneFrames = (s) => Math.max(1, Math.round((+s.duration || 0) * draft.fps));
@@ -67,11 +65,11 @@ const sceneFrames = (s) => Math.max(1, Math.round((+s.duration || 0) * draft.fps
 
 const IDEAS = ['Un astronaute marche sur la lune', 'Un dragon survole un village médiéval au lever du soleil', 'Une voiture de sport roule dans une ville néon sous la pluie', 'Un chat joue avec une pelote de laine, style dessin animé', 'Des vagues sur une plage tropicale au coucher du soleil', 'Une fleur qui s\'ouvre en accéléré'];
 const DURS = [3, 5, 10, 20, 30, 60];
-const ENGINE_OPTS = [['video', '🎬 Vidéo IA', 'vrai mouvement'], ['slides', '🖼 Images animées', 'rapide et fluide'], ['frames', '🎞 Image par image', 'expérimental']];
+const ENGINE_OPTS = [['video', '🎬 Vidéo IA', 'vrai mouvement'], ['slides', '🖼 Images animées', 'rapide et fluide'], ['frames', '🎞 Image par image', 'chorégraphié']];
 const ENGINE_HINT = {
   video: 'Un vrai modèle vidéo génère des clips de quelques secondes (mouvement réel), assemblés en une seule vidéo. Plus lent : environ 1 clip par minute avec Agnes (quota gratuit : 500 s de vidéo par jour).',
   slides: 'Chaque scène est découpée en images clés générées par l\'IA, puis animées : zoom, panoramique et fondus enchaînés. Rapide et très fluide, mais le mouvement vient de la caméra, pas des personnages.',
-  frames: 'Une image IA par image vidéo : le mouvement est saccadé et peu cohérent, ce n\'est pas une vraie vidéo. Réservé aux essais.',
+  frames: 'Chaque image est générée par l\'IA en suivant une chorégraphie (les instants clés du mouvement choisi), chaînée à l\'image précédente, puis lissée contre le scintillement. Caméra, filtres et transitions sont appliqués par ffmpeg. Le plus de contrôle, mais le plus long.',
 };
 const SPEEDS = [
   ['quality', 'Qualité', { mode: 'chain', concurrency: 1, keyEvery: 1 }, 'Chaque image part de la précédente : le plus cohérent, mais le plus lent.'],
@@ -168,6 +166,7 @@ function renderStudio() {
         <label>État final <span class="opt">optionnel</span><input type="text" data-f="endPrompt" value="${esc(s.endPrompt)}" placeholder="ex : le soleil se couche"></label>
         <label>Durée (s)<input type="number" data-f="duration" min="0.5" max="600" step="0.5" value="${s.duration}"></label>
       </div>
+      <div class="fxscene"></div>
       <label style="margin-top:12px">Narration <span class="opt">voix off, optionnel</span>
         <textarea data-f="narration" rows="2" placeholder="Ce que la voix dit pendant cette scène">${esc(s.narration || '')}</textarea></label>
       ${refsHtml(s.refs, i)}
@@ -176,6 +175,7 @@ function renderStudio() {
   renderProviderHint();
   renderSimple();
   renderSound();
+  renderFx();
   renderEstimate();
 }
 const v0 = (el) => el.value;
@@ -259,7 +259,7 @@ document.addEventListener('change', (e) => {
   if (el.dataset.f === 'duration') { const s = draft.scenes[+el.closest('.scene').dataset.i]; s.duration = clamp(+el.value || 1, 0.5, 600); el.value = s.duration; saveDraft(); renderEstimate(); }
   if (el.id === 'libPick' && el.value) {
     const l = library.find((x) => x.id === el.value);
-    if (l) { draft.scenes.push({ ...JSON.parse(JSON.stringify(l)), id: uid(), libId: l.id, promptOriginal: '' }); saveDraft(); renderStudio(); }
+    if (l) { draft.scenes.push(ensureScene({ ...JSON.parse(JSON.stringify(l)), id: uid(), libId: l.id, promptOriginal: '' })); saveDraft(); renderStudio(); }
     el.value = '';
   }
 });
@@ -293,7 +293,7 @@ async function launch(btn) {
   const p = providers()[draft.provider];
   if (p && !p.hasKey) { toast(`Ajoute d'abord la clé ${p.label}`, 'err'); return showTab('settings'); }
   try {
-    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, size: draft.engine === 'frames' || draft.engine === 'slides' ? effSize() : draft.size, fps: draft.engine === 'frames' ? draft.fps : 24, title: (!draft.title || draft.title === 'Ma vidéo') ? draft.scenes[0].prompt.trim().slice(0, 50) : draft.title, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs, narration }) => ({ name, prompt, motion, endPrompt, duration, refs, narration })) }));
+    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, size: draft.engine === 'frames' || draft.engine === 'slides' ? effSize() : draft.size, fps: draft.engine === 'frames' ? draft.fps : 24, title: (!draft.title || draft.title === 'Ma vidéo') ? draft.scenes[0].prompt.trim().slice(0, 50) : draft.title, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs, narration, fx }) => ({ name, prompt, motion, endPrompt, duration, refs, narration, fx })) }));
     server.jobs.unshift(job);
     toast(`« ${job.title} » lancée : ${job.done.length} images. Tu peux quitter la page.`, 'ok');
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -338,7 +338,8 @@ function updateJobCard(j) {
   r('title').textContent = j.title;
   const st = r('status'); st.textContent = STATUS[j.status] || j.status; st.className = 'pill ' + j.status;
   r('meta').textContent = `${label} · ${j.fps} fps · ${j.size} · ${j.scenes.length} scène(s) · ${MODE_LABEL[j.mode]}${j.keyEvery > 1 ? ` · 1 image IA sur ${j.keyEvery}` : ''} · ${(j.engine === 'frames' ? vframes / j.fps : secs).toFixed(1)} s${j.video && j.video.audio ? ' · 🔊 audio' : ''}`;
-  r('meta').textContent = `${{ video: '🎬 Vidéo IA', slides: '🖼 Images animées', frames: '🎞 Image par image' }[j.engine || 'frames']} · ` + r('meta').textContent;
+  const fxl = [...new Set((j.scenes || []).flatMap((sc) => ['motion', 'camera', 'filter', 'trans', 'style'].map((sl) => fxName(sl, (sc.fx && sc.fx[sl]) || (j.fx && j.fx[sl]))).filter(Boolean)))];
+  r('meta').textContent = `${{ video: '🎬 Vidéo IA', slides: '🖼 Images animées', frames: '🎞 Image par image' }[j.engine || 'frames']} · ` + r('meta').textContent + (fxl.length ? ' · ✨ ' + fxl.slice(0, 4).join(', ') + (fxl.length > 4 ? '…' : '') : '');
   const sc = r('series'); sc.hidden = !j.series; if (j.series) sc.textContent = `Série « ${j.series.title} » · épisode ${j.series.ep}/${j.series.of}`;
   const pct = j.status === 'assembling' ? (j.assemble || 0) * 100 : (n / total) * 100;
   r('bar').style.width = pct + '%';
@@ -490,6 +491,53 @@ function openAudio(job) {
     <div style="margin-top:14px">${audioUiHtml(modalAudio, 'modal')}</div>
     <div class="actions sticky-foot"><button class="btn primary" data-act="audioApply" style="margin-left:auto">Appliquer à la vidéo</button></div>`, () => { modalAudio = null; if (player) player.pause(); });
   $('#modalBody').dataset.job = job.id;
+}
+
+
+/* ---------- Effets & mouvements ---------- */
+let catalog = [];
+const SLOT_LABEL = { motion: 'Mouvement', camera: 'Caméra', filter: 'Filtre', trans: 'Transition', style: 'Style visuel' };
+const SLOT_HINT = {
+  motion: 'Le mouvement chorégraphie les images : les instants clés (garde, saut, impact…) sont répartis sur la scène et injectés dans chaque prompt.',
+  camera: 'Mouvement de caméra appliqué par ffmpeg sur la scène (zoom, travelling, orbite, épaule…).',
+  filter: 'Filtre de rendu appliqué par ffmpeg (VHS, glitch, noir, néons, pixel art…).',
+  trans: 'Transition vers cette scène depuis la précédente (flash, glitch, whip pan, fondu…).',
+  style: 'Style visuel ajouté à chaque prompt (genre, époque, mouvement artistique, univers).',
+};
+const fxName = (slot, id) => { const e = catalog.find((x) => x.slot === slot && x.id === id); return e ? e.name : ''; };
+function fxRowHtml(fx, target, inherit) {
+  return `<div class="fxrow" data-target="${target}">${['motion', 'camera', 'filter', 'trans', 'style'].map((slot) => {
+    const id = fx[slot], name = fxName(slot, id);
+    const inh = !id && inherit && inherit[slot] ? fxName(slot, inherit[slot]) : '';
+    return `<button class="fxslot ${id ? 'set' : ''}" data-act="fxPick" data-slot="${slot}" data-target="${target}"><span>${SLOT_LABEL[slot]}</span><b>${esc(name || (inh ? inh + ' (global)' : 'Aucun'))}</b>${id ? `<i class="clr" data-act="fxClear" data-slot="${slot}" data-target="${target}" title="Retirer">${ico('x')}</i>` : ''}</button>`;
+  }).join('')}</div>`;
+}
+const fxTarget = (t) => (t === 'global' ? draft.fx : draft.scenes[+t].fx);
+let pick = null;
+function openPicker(slot, target) {
+  pick = { slot, target, cat: '', q: '' };
+  const cats = [...new Set(catalog.filter((e) => e.slot === slot).map((e) => e.cat))];
+  openModal(`<h2>${SLOT_LABEL[slot]}</h2><p class="fine" style="margin-top:0">${SLOT_HINT[slot]}</p>
+    <div class="pick-tools"><input id="pickQ" type="text" placeholder="Rechercher (ex : kung fu, flash, vhs…)"><button class="btn sm" data-act="fxRandom">🎲 Au hasard</button><button class="btn sm ghost" data-act="fxNone">Aucun</button></div>
+    ${cats.length > 1 ? `<div class="pick-cats" id="pickCats"><button class="on" data-cat="">Tous</button>${cats.map((c) => `<button data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}
+    <div class="pick-grid" id="pickGrid"></div>`);
+  renderPick();
+  setTimeout(() => $('#pickQ') && $('#pickQ').focus(), 50);
+}
+function renderPick() {
+  if (!pick) return;
+  const cur = fxTarget(pick.target)[pick.slot], q = pick.q.toLowerCase();
+  const list = catalog.filter((e) => e.slot === pick.slot && (!pick.cat || e.cat === pick.cat) && (!q || (e.name + ' ' + e.desc + ' ' + e.cat).toLowerCase().includes(q)));
+  $('#pickGrid').innerHTML = list.map((e) => `<button class="pick-card ${cur === e.id ? 'on' : ''}" data-act="fxChoose" data-id="${e.id}"><b>${esc(e.name)}</b><small>${esc(e.desc)}</small>${e.beats ? `<span class="tag">${e.beats} instants clés</span>` : ''}</button>`).join('') || '<p class="fine">Aucun effet ne correspond.</p>';
+}
+function setFx(slot, target, id) { fxTarget(target)[slot] = id; saveDraft(); closeModal(); renderStudio(); }
+document.addEventListener('input', (e) => { if (e.target.id === 'pickQ' && pick) { pick.q = e.target.value; renderPick(); } });
+document.addEventListener('click', (e) => { const b = e.target.closest('#pickCats [data-cat]'); if (b && pick) { pick.cat = b.dataset.cat; $$('#pickCats button').forEach((x) => x.classList.toggle('on', x === b)); renderPick(); } });
+function renderFx() {
+  if (!catalog.length) return;
+  $('#fxGlobal').innerHTML = fxRowHtml(draft.fx, 'global');
+  $('#fxHint').textContent = draft.engine === 'video' ? 'Avec le type « Vidéo IA », le mouvement est envoyé au modèle comme texte ; caméra, filtre et transition sont appliqués par ffmpeg.' : draft.engine === 'frames' ? 'Image par image : le mouvement chorégraphie chaque image, la caméra et le filtre sont appliqués ensuite par ffmpeg.' : 'Images animées : les instants clés du mouvement deviennent les images clés.';
+  $$('.scene').forEach((el) => { const i = +el.dataset.i; const h = $('.fxscene', el); if (h) h.innerHTML = `<label style="margin-bottom:4px">Effets de cette scène <span class="opt">remplacent les effets globaux</span></label>${fxRowHtml(draft.scenes[i].fx, String(i), draft.fx)}`; });
 }
 
 /* ---------- Série : idées de prochains épisodes ---------- */
@@ -809,6 +857,11 @@ document.addEventListener('click', async (e) => {
       case 'jobAssemble': jobAction(job, 'assemble'); break;
       case 'jobFrames': openGallery(job); break;
       case 'jobConsole': openConsole(job); break;
+      case 'fxPick': if (e.target.closest('[data-act=fxClear]')) { setFx(b.dataset.slot, b.dataset.target, ''); break; } openPicker(b.dataset.slot, b.dataset.target); break;
+      case 'fxClear': setFx(b.dataset.slot, b.dataset.target, ''); break;
+      case 'fxChoose': setFx(pick.slot, pick.target, b.dataset.id); break;
+      case 'fxNone': setFx(pick.slot, pick.target, ''); break;
+      case 'fxRandom': { const l = catalog.filter((x) => x.slot === pick.slot); setFx(pick.slot, pick.target, l[Math.floor(Math.random() * l.length)].id); break; }
       case 'usageRefresh': loadUsage(true); break;
       case 'usageCheck': {
         const body = b.dataset.service ? { service: b.dataset.service } : { provider: b.dataset.pid };
@@ -864,7 +917,7 @@ document.addEventListener('click', async (e) => {
       case 'jobDel':
         if (!confirm(`Supprimer « ${job.title} », ses images et sa vidéo ?`)) return;
         await api('DELETE', `/api/jobs/${job.id}`); server.jobs = server.jobs.filter((j) => j !== job); renderJobs(); break;
-      case 'libUse': { const l = library.find((x) => x.id === b.closest('.libitem').dataset.id); draft.scenes.push({ ...JSON.parse(JSON.stringify(l)), id: uid(), libId: l.id, promptOriginal: '' }); saveDraft(); renderStudio(); toast('Ajoutée au storyboard', 'ok'); break; }
+      case 'libUse': { const l = library.find((x) => x.id === b.closest('.libitem').dataset.id); draft.scenes.push(ensureScene({ ...JSON.parse(JSON.stringify(l)), id: uid(), libId: l.id, promptOriginal: '' })); saveDraft(); renderStudio(); toast('Ajoutée au storyboard', 'ok'); break; }
       case 'libDel': { const id = b.closest('.libitem').dataset.id; library = library.filter((x) => x.id !== id); saveLibrary(); renderLibrary(); break; }
       case 'closeModal': closeModal(); break;
       case 'saveProv': await withBusy(b, 'Enregistrement…', () => saveSettings(provPatch(b.closest('.prov')))); break;
@@ -921,6 +974,7 @@ function setConn(ok, msg) {
 }
 
 /* ---------- Init ---------- */
+api('GET', '/api/effects').then((r) => { catalog = r.effects; renderFx(); renderJobs(); }).catch(() => {});
 renderStudio();
 renderJobs();
 const startTab = location.hash.slice(1);

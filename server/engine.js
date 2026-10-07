@@ -7,6 +7,8 @@ const store = require('./store');
 const providers = require('./providers');
 const media = require('./media');
 const audio = require('./audio');
+const effects = require('./effects-data');
+const fxlib = require('./fxlib');
 const { clamp, uid, retry } = require('./util');
 
 const jobs = new Map();
@@ -43,21 +45,40 @@ function log(job, lvl, msg) {
 const logLines = (job, since) => ({ lines: (job.log || []).filter((x) => x.n > since), last: job.logSeq || 0 });
 const slim = (job) => ({ ...job, log: undefined, logN: job.logSeq || 0 });
 
+/* ---------- Effets ---------- */
+const normFx = (o) => { const r = {}; for (const slot of effects.SLOTS) { const id = o && typeof o[slot] === 'string' ? o[slot] : ''; r[slot] = id && effects.find(slot, id) ? id : ''; } return r; };
+/** Effets d'une scène : ceux de la scène, sinon ceux du job. */
+function fxOf(job, scene) {
+  const o = {};
+  for (const slot of effects.SLOTS) o[slot] = effects.find(slot, (scene.fx && scene.fx[slot]) || (job.fx && job.fx[slot]) || '');
+  return o;
+}
+/** Instant clé de la chorégraphie pour la position p ∈ [0,1], avec fondu entre deux instants. */
+function beatAt(beats, p, blend = true) {
+  const pos = p * (beats.length - 1), i = Math.min(beats.length - 1, Math.floor(pos)), f = pos - i;
+  if (!blend || i === beats.length - 1 || f < 0.3) return beats[i];
+  return f > 0.7 ? beats[i + 1] : `transitioning from "${beats[i]}" to "${beats[i + 1]}"`;
+}
+const styleOf = (job, scene, fx) => [job.style, fx.style && fx.style.style, fx.motion && fx.motion.style].filter(Boolean).join(', ');
+
 /* ---------- Prompt et plan ---------- */
 function framePrompt(job, scene, k, n) {
+  const fx = fxOf(job, scene), sty = styleOf(job, scene, fx), beats = fx.motion && fx.motion.beats;
   if (job.engine === 'slides') {
-    let t = [job.style, scene.prompt].filter(Boolean).join(', ');
-    if (scene.motion) t += `. Action: ${scene.motion}`;
+    let t = [sty, scene.prompt].filter(Boolean).join(', ');
+    if (beats) t += `. Action in this shot: ${beatAt(beats, n > 1 ? k / (n - 1) : 0, false)}`;
+    else if (scene.motion) t += `. Action: ${scene.motion}`;
     if (scene.endPrompt && n > 1) t += `. The story progresses toward: ${scene.endPrompt} (shot ${k + 1} of ${n})`;
     else if (n > 1) t += `. Shot ${k + 1} of ${n}, a different camera angle or moment of the same scene`;
     if (k > 0 && job.mode !== 'none') t += '. Keep exactly the same characters, designs, art style and setting as the reference image.';
     return t + '. Cinematic composition, sharp focus';
   }
   const p = n > 1 ? Math.round((k / (n - 1)) * 100) : 0;
-  let t = [job.style, scene.prompt].filter(Boolean).join(', ');
-  if (scene.motion) t += `. Motion in this shot: ${scene.motion}`;
+  let t = [sty, scene.prompt].filter(Boolean).join(', ');
+  if (beats) t += `. Choreographed action, current moment of the sequence: ${beatAt(beats, n > 1 ? k / (n - 1) : 0)}`;
+  else if (scene.motion) t += `. Motion in this shot: ${scene.motion}`;
   if (scene.endPrompt) t += `. The scene evolves progressively toward this end state: ${scene.endPrompt}`;
-  if (scene.motion || scene.endPrompt) t += `. Current progress of the shot: ${p}%`;
+  if (beats || scene.motion || scene.endPrompt) t += `. Current progress of the shot: ${p}%`;
   if (k > 0 && job.mode !== 'none') t += '. Keep exactly the same characters, designs, art style, camera and lighting as the reference image, only advance the action by one very small step.';
   return t + ` (frame ${k + 1} of ${n})`;
 }
@@ -110,7 +131,7 @@ function createJob(spec) {
   if (engine === 'video' && !pcfg.videoKind) throw httpError(400, `${pcfg.label} ne propose pas de génération vidéo : choisis Agnes ou Pollinations, ou le type « Images animées »`);
   const noRefs = pcfg.refMode === 'none' && engine !== 'video';
   const job = {
-    engine, clipSec: clamp(+pcfg.videoMaxClip || 5, 2, 30), slideSec: clamp(+spec.slideSec || 3, 1.5, 10), clips: [],
+    fx: normFx(spec.fx), engine, clipSec: clamp(+pcfg.videoMaxClip || 5, 2, 30), slideSec: clamp(+spec.slideSec || 3, 1.5, 10), clips: [],
     id: 'j_' + uid(), title: str(spec.title, 120).trim() || 'Vidéo', provider, createdAt: Date.now(), status: 'paused',
     fps: engine === 'video' ? clamp(+pcfg.videoFps || 24, 12, 60) : engine === 'slides' ? clamp(Math.round(+spec.fps) || 24, 12, 60) : clamp(Math.round(+spec.fps) || 12, 12, 60), size,
     mode: noRefs ? 'none' : engine === 'video' ? (pcfg.videoKind === 'pollinations' && !process.env.PUBLIC_URL ? 'none' : 'chain') : MODES.includes(spec.mode) ? spec.mode : 'chain',
@@ -121,7 +142,7 @@ function createJob(spec) {
     scenes: spec.scenes.map((s, i) => {
       const prompt = str(s.prompt, 4000).trim();
       if (!prompt) throw httpError(400, `La scène #${i + 1} n'a pas de prompt`);
-      return { name: str(s.name, 80) || 'Scène ' + (i + 1), prompt, motion: str(s.motion, 500).trim(), endPrompt: str(s.endPrompt, 500).trim(), duration: clamp(+s.duration || 3, 0.5, 600), refs: validRefs(s.refs), narration: str(s.narration, 1500).trim() };
+      return { name: str(s.name, 80) || 'Scène ' + (i + 1), prompt, motion: str(s.motion, 500).trim(), endPrompt: str(s.endPrompt, 500).trim(), duration: clamp(+s.duration || 3, 0.5, 600), refs: validRefs(s.refs), narration: str(s.narration, 1500).trim(), fx: normFx(s.fx) };
     }),
     done: '', error: '', note: '', video: null, lastFrame: -1, spf: 0, assemble: 0, log: [], logSeq: 0,
   };
@@ -274,8 +295,12 @@ class Runner {
       if (id) { try { ref = await fsp.readFile(assetPath(id)); } catch { /* référence supprimée */ } }
     }
     if (ref && p.videoKind === 'pollinations') { refUrl = await pubUrl(job.id, ref, `r${i}`); if (!refUrl) ref = null; }
-    let prompt = [job.style, scene.prompt].filter(Boolean).join(', ');
-    if (scene.motion) prompt += `. Camera and action: ${scene.motion}`;
+    const fx = fxOf(job, scene), beats = fx.motion && fx.motion.beats;
+    let prompt = [styleOf(job, scene, fx), scene.prompt].filter(Boolean).join(', ');
+    if (beats) {          // la séquence d'instants clés est répartie sur les clips de la scène
+      const a = Math.floor((f.k / f.n) * beats.length), b = Math.max(a + 1, Math.ceil(((f.k + 1) / f.n) * beats.length));
+      prompt += `. Action sequence in this shot: ${beats.slice(a, b).join(', then ')}`;
+    } else if (scene.motion) prompt += `. Camera and action: ${scene.motion}`;
     if (f.k > 0) prompt += '. Continue the same shot seamlessly, same characters, same setting and style.';
     if (scene.endPrompt && f.k === f.n - 1) prompt += `. The shot ends with: ${scene.endPrompt}`;
     const st = (job.clips[i] = job.clips[i] || {});
@@ -412,30 +437,57 @@ async function assemble(job) {
     const out = silentPath(job.id) + '.tmp.mp4';
     let frames = 0, interp = false;
     const [W, H] = evenSize(job.size), pl = plan(job);
-    const onP = (p) => { job.assemble = p * 0.9; };
-    if (job.engine === 'video' || job.engine === 'slides') {
+    const fxs = job.scenes.map((sc) => fxOf(job, sc));
+    const transOf = (si) => (fxs[si].trans ? { name: fxs[si].trans.trans, dur: fxs[si].trans.transDur } : { name: 'cut', dur: 0.04 });
+    if (job.engine === 'slides') {
       const idx = [...job.done].map((c, i) => (c === '1' ? i : -1)).filter((i) => i >= 0);
-      if (!idx.length) throw new Error(job.engine === 'video' ? 'aucun clip généré' : 'aucune image générée');
+      if (!idx.length) throw new Error('aucune image générée');
       frames = idx.length;
-      const files = idx.map((i) => (job.engine === 'video' ? clipPath(job.id, i) : framePath(job.id, i)));
-      const secs = idx.map((i) => pl[i].sec);
-      if (job.engine === 'video') await media.encodeClips(files, secs, W, H, job.fps, out, onP);
-      else await media.encodeSlides(files, secs, W, H, job.fps, out, onP);
+      const per = idx.map((i, n) => {
+        const fx = fxs[pl[i].si];
+        const newScene = n > 0 && pl[i].si !== pl[idx[n - 1]].si;
+        return { cam: fx.camera && fx.camera.cam, vf: fx.filter ? fxlib.filterVf(fx.filter.fx) : '', trans: newScene && fxs[pl[i].si].trans ? transOf(pl[i].si) : null };
+      });
+      await media.encodeSlides(idx.map((i) => framePath(job.id, i)), idx.map((i) => pl[i].sec), W, H, job.fps, out, (p) => { job.assemble = p * 0.9; }, per);
+      let acc = 0; job.sceneStarts = job.scenes.map((sc) => { const t = acc; acc += sc.duration; return t; });
     } else {
+      // un segment par scène (caméra + filtre propres à la scène), puis jonction avec les transitions
       await fsp.rm(seq, { recursive: true, force: true });
       await fsp.mkdir(seq, { recursive: true });
-      const total = job.done.length;
-      const idxs = [...job.done].map((c, i) => (c === '-' ? -1 : i)).filter((i) => i >= 0);   // images à placer dans la séquence
-      let last = job.done.indexOf('1');
-      if (last < 0) throw new Error('aucune image générée');
-      for (let k = 0; k < idxs.length; k++) {   // images manquantes : on répète la précédente
-        if (job.done[idxs[k]] === '1') { last = idxs[k]; frames++; }
-        await fsp.symlink(framePath(job.id, last), path.join(seq, String(k + 1).padStart(5, '0') + '.png'));
+      const segs = [], trans = [], segScene = [];
+      for (let si = 0; si < job.scenes.length; si++) {
+        const items = pl.map((f, i) => (f.si === si ? i : -1)).filter((i) => i >= 0);
+        const fx = fxs[si], seg = path.join(seq, `seg_${si}.mp4`), nOut = items.length;
+        const filt = fx.filter ? fxlib.filterVf(fx.filter.fx) : '';
+        const onSeg = (p) => { job.assemble = ((segs.length + p) / job.scenes.length) * 0.6; };
+        if (job.engine === 'video') {
+          const done = items.filter((i) => job.done[i] === '1');
+          if (!done.length) continue;
+          frames += done.length;
+          const secs = done.map((i) => pl[i].sec), total = secs.reduce((a, b) => a + b, 0), N = Math.max(2, Math.round(total * job.fps));
+          const pre = [fx.camera ? fxlib.camFilter(fx.camera.cam, N, W, H, job.fps) : '', filt].filter(Boolean);
+          await media.encodeClips(done.map((i) => clipPath(job.id, i)), secs, W, H, job.fps, seg, onSeg, pre);
+        } else {
+          const gen = items.filter((i) => job.done[i] !== '-');
+          if (!gen.some((i) => job.done[i] === '1')) continue;
+          const dir = path.join(seq, 's' + si);
+          await fsp.mkdir(dir, { recursive: true });
+          let last = gen.find((i) => job.done[i] === '1');
+          for (let k = 0; k < gen.length; k++) {   // images manquantes : on répète la précédente
+            if (job.done[gen[k]] === '1') { last = gen[k]; frames++; }
+            await fsp.symlink(framePath(job.id, last), path.join(dir, String(k + 1).padStart(5, '0') + '.png'));
+          }
+          const it = gen.length < nOut;
+          interp = interp || it;
+          const pre = [nOut >= 6 ? 'deflicker=mode=pm:size=5' : '', fx.camera ? fxlib.camFilter(fx.camera.cam, nOut, W, H, job.fps) : '', filt].filter(Boolean);
+          await media.encodeVideo(path.join(dir, '%05d.png'), { inFps: it ? job.fps * gen.length / nOut : job.fps, outFps: job.fps, interp: it ? INTERP : null, pre }, seg, nOut, onSeg);
+        }
+        segs.push(seg); segScene.push(si);
+        trans.push(segs.length === 1 ? null : transOf(si));
       }
-      interp = job.keyEvery > 1 && idxs.length < total;
-      await media.encodeVideo(path.join(seq, '%05d.png'), {
-        inFps: interp ? job.fps * idxs.length / total : job.fps, outFps: job.fps, interp: interp ? INTERP : null,
-      }, out, total, onP);
+      if (!segs.length) throw new Error(job.engine === 'video' ? 'aucun clip généré' : 'aucune image générée');
+      const starts = await media.joinSegments(segs, trans, job.fps, out, (p) => { job.assemble = 0.6 + p * 0.3; });
+      job.sceneStarts = job.scenes.map((sc, si) => { const k = segScene.indexOf(si); return k >= 0 ? starts[k] : (starts[Math.max(0, segScene.findIndex((x) => x > si) - 1)] || 0); });
     }
     await fsp.rename(out, silentPath(job.id));
     await finalizeVideo(job);

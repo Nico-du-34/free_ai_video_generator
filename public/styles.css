@@ -244,3 +244,21 @@ details details{margin-top:14px}
 .utable td{padding:6px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;vertical-align:top}
 .utable .bad{color:var(--err)}.utable .good{color:var(--ok)}
 .card .card-title.row{display:flex;justify-content:space-between;align-items:center}
+
+/* effets */
+.fxrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.fxslot{display:flex;flex-direction:column;gap:2px;text-align:left;background:var(--surface2);border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;cursor:pointer;font:inherit;color:var(--text);position:relative;transition:.12s}
+.fxslot:hover{border-color:var(--line2)}.fxslot.set{border-color:var(--acc);background:var(--acc-soft)}
+.fxslot span{font-size:11px;color:var(--muted);font-weight:600}.fxslot b{font-size:13px;font-weight:650;padding-right:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fxslot .clr{position:absolute;top:6px;right:6px;width:20px;height:20px;border-radius:6px;display:grid;place-items:center;color:var(--muted)}
+.fxslot .clr:hover{background:var(--surface3);color:var(--err)}
+.fxscene{margin-top:12px}.fxscene .fxrow{grid-template-columns:repeat(5,1fr)}
+@media(max-width:900px){.fxscene .fxrow{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}}
+.pick-tools{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}.pick-tools input{margin:0;flex:1;min-width:180px}
+.pick-cats{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.pick-cats button{border:1px solid var(--line);background:var(--surface2);color:var(--muted);border-radius:99px;padding:3px 11px;font:inherit;font-size:12px;cursor:pointer}
+.pick-cats button.on{border-color:var(--acc);color:var(--acc);background:var(--acc-soft)}
+.pick-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;max-height:52vh;overflow:auto;padding:2px}
+.pick-card{text-align:left;background:var(--surface2);border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;font:inherit;color:var(--text)}
+.pick-card:hover{border-color:var(--acc)}.pick-card.on{border-color:var(--acc);background:var(--acc-soft)}
+.pick-card b{display:block;font-size:13px}.pick-card small{margin-top:2px}.pick-card .tag{display:inline-block;margin-top:4px;font-size:10px;font-weight:700;color:var(--acc);background:var(--acc-soft);border-radius:99px;padding:1px 8px}

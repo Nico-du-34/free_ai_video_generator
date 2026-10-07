@@ -1,6 +1,7 @@
 'use strict';
 // Petites opérations ffmpeg (conversion / redimensionnement / assemblage).
 const { spawn } = require('child_process');
+const fs = require('fs');
 
 function ffmpeg(args, { input, onLine } = {}) {
   return new Promise((resolve, reject) => {
@@ -41,6 +42,7 @@ async function encodeVideo(seqPattern, o, outFile, total, onProgress) {
   if (o.interp === 'mci') filters.push(`minterpolate=fps=${o.outFps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1`);
   else if (o.interp === 'blend') filters.push(`minterpolate=fps=${o.outFps}:mi_mode=blend`);
   if (o.interp) filters.push(`tpad=stop_mode=clone:stop=${total}`);   // l'interpolation raccourcit la fin : on complète puis on coupe
+  for (const f of o.pre || []) if (f) filters.push(f);
   filters.push('scale=trunc(iw/2)*2:trunc(ih/2)*2', 'format=yuv420p');
   await ffmpeg([
     '-y', '-framerate', String(o.inFps), '-i', seqPattern,
@@ -75,41 +77,66 @@ const X264 = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-movflags',
 function progressLine(total, cb) { return (l) => { const m = /^frame=(\d+)/.exec(l); if (m && cb) cb(Math.min(1, +m[1] / total)); }; }
 
 /** Concatène des clips vidéo IA : recadrés à W×H, cadence fps, figés sur la dernière image s'ils sont trop courts, coupés à `secs`. */
-async function encodeClips(files, secs, W, H, fps, outFile, onProgress) {
+async function encodeClips(files, secs, W, H, fps, outFile, onProgress, pre = []) {
   const args = ['-y'];
   files.forEach((f) => args.push('-i', f));
   const parts = files.map((f, i) => `[${i}:v]tpad=stop_mode=clone:stop_duration=8,trim=duration=${secs[i].toFixed(3)},setpts=PTS-STARTPTS,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},setsar=1,format=yuv420p[v${i}]`);
-  parts.push(`${files.map((f, i) => `[v${i}]`).join('')}concat=n=${files.length}:v=1:a=0[out]`);
+  parts.push(`${files.map((f, i) => `[v${i}]`).join('')}concat=n=${files.length}:v=1:a=0[cc]`);
+  parts.push(`[cc]${[...pre, 'format=yuv420p'].join(',')}[out]`);
   const total = Math.max(1, Math.round(secs.reduce((a, b) => a + b, 0) * fps));
   await ffmpeg([...args, '-filter_complex', parts.join(';'), '-map', '[out]', ...X264, '-progress', 'pipe:1', outFile], { onLine: progressLine(total, onProgress) });
 }
 
 /** Images fixes → vidéo : mouvements de caméra (zoom / panoramique) + fondus enchaînés. */
-async function encodeSlides(files, secs, W, H, fps, outFile, onProgress) {
+async function encodeSlides(files, secs, W, H, fps, outFile, onProgress, per = []) {
+  const fxlib = require('./fxlib');
   const n = files.length;
-  const T = Math.min(0.6, Math.max(0.1, Math.min(...secs) / 2));
-  const FX = [
-    (N) => ({ z: `1+0.18*on/${N}`, x: 'iw/2-(iw/zoom/2)', y: 'ih/2-(ih/zoom/2)' }),
-    (N) => ({ z: `1.18-0.18*on/${N}`, x: 'iw/2-(iw/zoom/2)', y: 'ih/2-(ih/zoom/2)' }),
-    (N) => ({ z: '1.15', x: `(iw-iw/zoom)*on/${N}`, y: 'ih/2-(ih/zoom/2)' }),
-    (N) => ({ z: '1.15', x: `(iw-iw/zoom)*(1-on/${N})`, y: 'ih/2-(ih/zoom/2)' }),
-    (N) => ({ z: '1.15', x: 'iw/2-(iw/zoom/2)', y: `(ih-ih/zoom)*(1-on/${N})` }),
-  ];
+  const defT = Math.min(0.6, Math.max(0.1, Math.min(...secs) / 2));
+  const FX = ['push', 'pull', 'panr', 'panl', 'tiltup'];
+  const tin = (i) => {      // transition d'entrée dans l'image i
+    const t = per[i] && per[i].trans;
+    const name = t ? (t.name === 'cut' ? 'fade' : t.name) : i % 2 ? 'fade' : 'dissolve';
+    return { name, dur: Math.max(0.04, Math.min(t ? t.dur : defT, secs[i - 1] / 2, secs[i] / 2)) };
+  };
   const args = ['-y'];
   files.forEach((f) => args.push('-i', f));
   const parts = files.map((f, i) => {
-    const N = Math.max(2, Math.round((secs[i] + (i === n - 1 ? 0 : T)) * fps));
-    const fx = FX[i % FX.length](N);
-    return `[${i}:v]scale=${2 * W}:${2 * H}:force_original_aspect_ratio=increase,crop=${2 * W}:${2 * H},zoompan=z='${fx.z}':x='${fx.x}':y='${fx.y}':d=${N}:s=${W}x${H}:fps=${fps},setsar=1,format=yuv420p[s${i}]`;
+    const N = Math.max(2, Math.round((secs[i] + (i === n - 1 ? 0 : tin(i + 1).dur)) * fps));
+    const cam = fxlib.camSlide((per[i] && per[i].cam) || FX[i % FX.length], N) || fxlib.camSlide('push', N);
+    const vf = per[i] && per[i].vf ? ',' + per[i].vf : '';
+    return `[${i}:v]scale=${2 * W}:${2 * H}:force_original_aspect_ratio=increase,crop=${2 * W}:${2 * H},zoompan=z='${cam.z}':x='${cam.x}':y='${cam.y}':d=${N}:s=${W}x${H}:fps=${fps}${vf},setsar=1,format=yuv420p[s${i}]`;
   });
   let cur = 's0', acc = 0;
   for (let i = 1; i < n; i++) {
     acc += secs[i - 1];
-    parts.push(`[${cur}][s${i}]xfade=transition=${i % 2 ? 'fade' : 'dissolve'}:duration=${T.toFixed(3)}:offset=${acc.toFixed(3)}[x${i}]`);
+    const t = tin(i);
+    parts.push(`[${cur}][s${i}]xfade=transition=${t.name}:duration=${t.dur.toFixed(3)}:offset=${acc.toFixed(3)}[x${i}]`);
     cur = 'x' + i;
   }
   const total = Math.max(1, Math.round(secs.reduce((a, b) => a + b, 0) * fps));
   await ffmpeg([...args, '-filter_complex', parts.join(';'), '-map', `[${cur}]`, ...X264, '-progress', 'pipe:1', outFile], { onLine: progressLine(total, onProgress) });
 }
 
-module.exports = { lastFrame, encodeClips, encodeSlides, ffmpeg, toPng, toJpeg, encodeVideo, duration, toMp3 };
+/** Assemble des segments (un par scène) avec une transition par frontière : trans[i] = { name, dur } pour passer du segment i-1 au segment i. */
+async function joinSegments(files, trans, fps, outFile, onProgress) {
+  if (files.length === 1) { await fs.promises.copyFile(files[0], outFile); return [0]; }
+  const durs = await Promise.all(files.map(duration));
+  const args = ['-y'];
+  files.forEach((f) => args.push('-i', f));
+  const parts = [];
+  let cur = '0:v', merged = durs[0];
+  const starts = [0];
+  for (let i = 1; i < files.length; i++) {
+    const t = trans[i] || { name: 'fade', dur: 0.04 };
+    const d = Math.min(t.dur, merged / 2, durs[i] / 2);
+    const label = `x${i}`;
+    parts.push(`[${cur}][${i}:v]xfade=transition=${t.name === 'cut' ? 'fade' : t.name}:duration=${d.toFixed(3)}:offset=${(merged - d).toFixed(3)}[${label}]`);
+    starts.push(merged - d);
+    merged = merged + durs[i] - d;
+    cur = label;
+  }
+  await ffmpeg([...args, '-filter_complex', parts.join(';'), '-map', `[${cur}]`, '-r', String(fps), ...X264, '-progress', 'pipe:1', outFile], { onLine: progressLine(Math.max(1, Math.round(merged * fps)), onProgress) });
+  return starts;
+}
+
+module.exports = { joinSegments, lastFrame, encodeClips, encodeSlides, ffmpeg, toPng, toJpeg, encodeVideo, duration, toMp3 };
