@@ -33,7 +33,7 @@ const DEFAULTS = {
     agnes: {
       label: 'Agnes AI', type: 'openai', baseUrl: 'https://apihub.agnes-ai.com/v1', apiKey: '',
       imageModel: 'agnes-image-2.1-flash', editModel: '', chatModel: 'agnes-2.5-flash',
-      rpm: 15, refMode: 'field', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '',
+      rpm: 15, dailyLimit: 4000, refMode: 'field', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '',
       keyUrl: 'https://platform.agnes-ai.com',
       help: 'Texte → image et références. Clé gratuite à la création du compte.',
     },
@@ -133,6 +133,7 @@ function updateSettings(patch) {
       if (!/^https?:\/\/[^\s]+$/i.test(pp.baseUrl.trim())) throw Object.assign(new Error('URL de base invalide'), { status: 400 });
       p.baseUrl = pp.baseUrl.trim().replace(/\/+$/, '');
     }
+    if (pp.dailyLimit !== undefined) p.dailyLimit = Math.min(1e6, Math.max(0, Math.round(+pp.dailyLimit) || 0));
     if (pp.rpm !== undefined) p.rpm = Math.min(600, Math.max(1, Math.round(+pp.rpm) || 10));
     if (['field', 'edits', 'none'].includes(pp.refMode)) p.refMode = pp.refMode;
     if (typeof pp.refArray === 'boolean') p.refArray = pp.refArray;

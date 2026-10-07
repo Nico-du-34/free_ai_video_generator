@@ -33,6 +33,7 @@
     <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
     <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></symbol>
     <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></symbol>
     <symbol id="i-clapper" viewBox="0 0 24 24"><path d="M4 11h16v10H4zM4 11l-1-5 17-3 1 5"/><path d="m8 7 2 3M13 6l2 3"/></symbol>
   </defs>
 </svg>
@@ -43,6 +44,7 @@
     <nav id="tabs">
       <button data-tab="studio" class="active"><svg class="i"><use href="#i-film"/></svg><span>Studio</span></button>
       <button data-tab="jobs"><svg class="i"><use href="#i-layers"/></svg><span>Instances</span><b id="jobsBadge" class="count" hidden>0</b></button>
+      <button data-tab="usage"><svg class="i"><use href="#i-chart"/></svg><span>Usage &amp; IA</span></button>
       <button data-tab="library"><svg class="i"><use href="#i-book"/></svg><span>Bibliothèque</span></button>
       <button data-tab="settings"><svg class="i"><use href="#i-sliders"/></svg><span>Réglages</span></button>
     </nav>
@@ -166,6 +168,13 @@
       <header class="page-head"><div><h1>Instances</h1><p id="jobsSummary">—</p></div></header>
       <div id="jobList" class="jobs"></div>
       <div id="jobsEmpty" class="empty-state"><svg class="i xl"><use href="#i-layers"/></svg><h3>Aucune instance</h3><p>Lance une génération depuis le Studio, elle apparaîtra ici.</p><button class="btn primary" data-go="studio">Aller au Studio</button></div>
+    </section>
+
+    <!-- USAGE & IA -->
+    <section id="tab-usage" class="tab">
+      <header class="page-head row"><div><h1>Usage &amp; IA</h1><p>État de tes clés API, consommation, quotas et modèles disponibles. Les compteurs sont ceux de cette application (UTC).</p></div>
+        <button class="btn" data-act="usageRefresh"><svg class="i"><use href="#i-refresh"/></svg>Actualiser</button></header>
+      <div id="usageBody"><p class="muted">Chargement…</p></div>
     </section>
 
     <!-- BIBLIOTHEQUE -->

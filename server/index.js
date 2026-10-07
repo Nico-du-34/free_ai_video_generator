@@ -9,6 +9,7 @@ const engine = require('./engine');
 const providers = require('./providers');
 const media = require('./media');
 const audio = require('./audio');
+const usage = require('./usage');
 const { uid, retry, ApiError } = require('./util');
 
 const PORT = +process.env.PORT || 8080;
@@ -70,6 +71,17 @@ async function api(req, res, url) {
   if (p === '/api/state' && m === 'GET') {
     return send(res, 200, { jobs: engine.list(), settings: store.publicSettings(), latency: store.stats.latency, time: Date.now() });
   }
+  if (p === '/api/usage' && m === 'GET') {
+    const o = await usage.overview(providers.quotaState);
+    const js = engine.list();
+    o.jobs = { total: js.length, running: js.filter((j) => j.status === 'running').length, assembling: js.filter((j) => j.status === 'assembling').length, error: js.filter((j) => j.status === 'error').length };
+    return send(res, 200, o);
+  }
+  if (p === '/api/usage/check' && m === 'POST') {
+    const b = await readJson(req);
+    return send(res, 200, b.service ? await usage.checkService(String(b.service)) : await usage.checkProvider(String(b.provider)));
+  }
+  if (p === '/api/usage/reset' && m === 'POST') { usage.reset(); return send(res, 200, { ok: true }); }
   if (p === '/api/settings' && m === 'PUT') { store.updateSettings(await readJson(req)); return send(res, 200, store.publicSettings()); }
   if (p === '/api/test' && m === 'POST') {
     const b = await readJson(req);
@@ -208,5 +220,5 @@ server.listen(PORT, HOST, () => {
   console.log(`Frame Studio → http://localhost:${PORT}  (données : ${store.DATA})`);
   if (!PASS) console.warn('⚠  APP_PASSWORD non défini : l\'application est accessible sans mot de passe. Définis-le avant toute mise en ligne.');
 });
-const shutdown = () => { engine.flushAll(); server.close(); process.exit(0); };
+const shutdown = () => { engine.flushAll(); usage.flush(); server.close(); process.exit(0); };
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

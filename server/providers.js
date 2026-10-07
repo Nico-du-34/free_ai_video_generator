@@ -1,6 +1,7 @@
 'use strict';
 const store = require('./store');
 const { ApiError, sleep, retry } = require('./util');
+const usage = require('./usage');
 
 /* Limiteur : un quota images/minute par fournisseur, partagé par toutes les instances.
    Après un 429, le débit est divisé par deux pendant 2 minutes (ralentissement adaptatif). */
@@ -10,7 +11,14 @@ function effectiveRpm(pid) {
   const rpm = Math.max(1, store.providerCfg(pid).rpm);
   return (cool.get(pid) || 0) > Date.now() ? Math.max(1, Math.floor(rpm / 2)) : rpm;
 }
+function quotaState(pid) {
+  const now = Date.now();
+  const used = (stamps.get(pid) || []).filter((t) => now - t < 60000).length;
+  return { used, limit: effectiveRpm(pid), cooling: Math.max(0, (cool.get(pid) || 0) - now) };
+}
 async function acquire(pid, signal) {
+  const lim = store.providerCfg(pid).dailyLimit;
+  if (lim > 0 && usage.imagesToday(pid) >= lim) throw new ApiError(`Limite quotidienne atteinte : ${usage.imagesToday(pid)}/${lim} images aujourd'hui avec ${store.providerCfg(pid).label} (modifiable dans Réglages › Avancé)`, 403);
   for (;;) {
     const now = Date.now();
     const a = (stamps.get(pid) || []).filter((t) => now - t < 60000);
@@ -24,12 +32,13 @@ const noRespFormat = new Set();
 const mimeOf = (b) => (b[0] === 0xff ? 'image/jpeg' : b[0] === 0x52 ? 'image/webp' : 'image/png');
 
 /** Requête POST générique : retourne { buf, type } ou lève ApiError. */
-async function call(pid, url, { json, form }, signal) {
+async function call(pid, url, { json, form, kind = 'image' }, signal) {
   const p = store.providerCfg(pid);
   if (!p.apiKey) throw new ApiError(`Clé API ${p.label} manquante (onglet Réglages)`, 401);
   if (/VOTRE_ACCOUNT_ID/.test(url)) throw new ApiError('Renseigne ton Account ID Cloudflare dans l\'URL de base (Réglages › Avancé)', 400);
   const timeout = AbortSignal.timeout(240000);
   const sig = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const t0 = Date.now();
   let res;
   try {
     res = await fetch(url, {
@@ -39,6 +48,7 @@ async function call(pid, url, { json, form }, signal) {
     });
   } catch (e) {
     if (signal && signal.aborted) throw e;
+    usage.record({ service: pid, kind, ok: false, status: 0, msg: 'Réseau : ' + ((e.cause && e.cause.message) || e.message) });
     throw new ApiError('Réseau : ' + ((e.cause && e.cause.message) || e.message), 0);
   }
   const buf = Buffer.from(await res.arrayBuffer());
@@ -48,8 +58,10 @@ async function call(pid, url, { json, form }, signal) {
     const text = buf.toString('utf8', 0, 600);
     let body; try { body = JSON.parse(text); } catch { /* pas du JSON */ }
     const msg = (body && ((body.error && (body.error.message || body.error)) || body.message || (body.errors && body.errors[0] && body.errors[0].message))) || text.slice(0, 200) || res.statusText;
+    usage.record({ service: pid, kind, ok: false, status: res.status, msg: typeof msg === 'string' ? msg : JSON.stringify(msg) });
     throw new ApiError(`HTTP ${res.status} : ${typeof msg === 'string' ? msg : JSON.stringify(msg)}`, res.status, parseFloat(res.headers.get('retry-after')) || 0);
   }
+  usage.record({ service: pid, kind, ok: true, ms: Date.now() - t0, status: res.status });
   return { buf, type };
 }
 function asJson({ buf }) {
@@ -130,7 +142,7 @@ function chatProvider(pid) {
 async function chat(pid, text, signal, system) {
   const id = chatProvider(pid), p = store.providerCfg(id);
   const json = await retry(async () => asJson(await call(id, p.baseUrl + '/chat/completions', {
-    json: { model: p.chatModel, messages: [{ role: 'system', content: system || store.getSettings().enhancePrompt }, { role: 'user', content: text }] },
+    kind: 'chat', json: { model: p.chatModel, messages: [{ role: 'system', content: system || store.getSettings().enhancePrompt }, { role: 'user', content: text }] },
   }, signal)), signal);
   const out = json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
   if (!out) throw new ApiError('Réponse vide du modèle de texte');
@@ -173,4 +185,4 @@ async function narrate(pid, scenes, lang, signal) {
   return arr.map((x) => String(x || '').trim().slice(0, 1500));
 }
 
-module.exports = { acquire, image, chat, enhanceMany, seriesIdeas, narrate, call, asJson };
+module.exports = { quotaState, acquire, image, chat, enhanceMany, seriesIdeas, narrate, call, asJson };

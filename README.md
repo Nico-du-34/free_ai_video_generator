@@ -14,6 +14,7 @@ docker compose up -d --build
 Sans Docker : Node ≥ 22 + ffmpeg, puis `npm start`.
 
 ## Fonctions
+- **Onglet Usage & IA** : par clé enregistrée, quota de la minute en direct (et ralentissement après un 429), images du jour face à une limite quotidienne réglable (Agnes : 4 000 par défaut, bloque proprement une fois atteinte), compteurs images / texte / voix, erreurs, latence, courbe sur 14 jours, dernière erreur ; bouton *Vérifier la clé et le compte* (validité, modèles disponibles à assigner en un clic, solde/profil quand l'API l'expose), services audio, journal des derniers appels, stockage utilisé.
 - **Voix et ambiance** (carte *Son* du Studio, bouton *Audio* sur chaque instance) : narration par scène (écrite à la main ou par l'IA, calée sur la durée), voix gratuites (Google Traduction sans clé, voix locale espeak, Cloudflare MeloTTS, ou `/audio/speech` d'une API compatible OpenAI), ambiances générées par ffmpeg (pluie, vent, océan, feu, forêt, ville, espace, nappe musicale), ou recherche sur Freesound / Jamendo (clés gratuites). Mixage avec baisse automatique de l'ambiance quand la voix parle ; on peut changer l'audio après coup sans régénérer les images.
 - **Console par instance** (bouton Console) : journal en direct de chaque requête, essais, erreurs, assemblage.
 - **Séries** : bouton *Série* sur une instance → l'IA propose les prompts des épisodes suivants, tu les modifies, puis *Lancer N épisodes* crée une instance par épisode (références et dernière image de l'épisode 1 réutilisées pour garder la cohérence).

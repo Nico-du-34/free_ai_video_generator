@@ -46,6 +46,10 @@ http.createServer((req, res) => {
     if (/\/search\/text\//.test(req.url)) { console.log('freesound search', req.url.slice(0, 80)); return res.end(JSON.stringify({ results: [{ id: 1, name: 'x', previews: { 'preview-hq-mp3': 'http://127.0.0.1:9099/files/amb.mp3' } }] })); }
     if (/\/tracks\//.test(req.url)) { console.log('jamendo search', req.url.slice(0, 80)); return res.end(JSON.stringify({ results: [{ audio: 'http://127.0.0.1:9099/files/amb.mp3' }] })); }
     if (/\/files\/amb\.mp3/.test(req.url)) { res.setHeader('content-type', 'audio/mpeg'); return res.end(tone(120, 5)); }
+    if (/\/v1\/models$/.test(req.url)) return res.end(JSON.stringify({ data: ['agnes-image-2.1-flash', 'agnes-2.5-flash', 'flux', 'kontext', 'gpt-image-1', 'openai-fast'].map((id) => ({ id })) }));
+    if (/\/account\/balance/.test(req.url)) return res.end(JSON.stringify({ balance: 42.5, currency: 'pollen' }));
+    if (/tokens\/verify/.test(req.url)) return res.end(JSON.stringify({ success: true, result: { status: 'active', expires_on: '2027-01-01T00:00:00Z' } }));
+    if (/whoami-v2/.test(req.url)) return res.end(JSON.stringify({ name: 'tester', type: 'user', isPro: false }));
     const edits = req.url.endsWith('/images/edits');
     if (req.url.endsWith('/images/generations') || edits) {
       n++;

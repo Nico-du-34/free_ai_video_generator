@@ -16,6 +16,7 @@ function showTab(name) {
   if (name === 'library') renderLibrary();
   if (name === 'jobs') renderJobs();
   if (name === 'settings') renderSettings();
+  if (name === 'usage') startUsage(); else stopUsage();
   history.replaceState(null, '', '#' + name);
   window.scrollTo(0, 0);
 }
@@ -484,6 +485,101 @@ document.addEventListener('input', (e) => {
   if (el.dataset.ep && ser) { ser.ideas[+el.closest('.ep').dataset.i][el.dataset.ep] = el.value; const n = ser.ideas.filter((x) => x.prompt.trim()).length; $('#serGo').textContent = `Lancer ${n} épisode${n > 1 ? 's' : ''}`; $('#serGo').disabled = !n; }
 });
 
+
+/* ---------- Usage & IA ---------- */
+let usageData = null, usageKey = '', usageTimer = null;
+const modelFilter = {};
+const ago = (t) => { if (!t) return 'jamais'; const s = Math.round((Date.now() - t) / 1000); return s < 5 ? 'à l\'instant' : s < 60 ? `il y a ${s} s` : s < 3600 ? `il y a ${Math.round(s / 60)} min` : s < 86400 ? `il y a ${Math.round(s / 3600)} h` : `il y a ${Math.round(s / 86400)} j`; };
+const bytes = (n) => (n > 1073741824 ? (n / 1073741824).toFixed(2) + ' Go' : n > 1048576 ? (n / 1048576).toFixed(1) + ' Mo' : Math.max(1, Math.round(n / 1024)) + ' Ko');
+const hhmm = (t) => new Date(t).toLocaleTimeString('fr-FR');
+function meter(label, used, limit, right) {
+  const pct = limit ? Math.min(100, (used / limit) * 100) : 0;
+  return `<div class="meter"><div class="row"><span>${label}</span><b>${right}</b></div><div class="track"><i class="${pct >= 100 ? 'full' : pct >= 70 ? 'hot' : ''}" style="width:${pct}%"></i></div></div>`;
+}
+function spark(series) {
+  const max = Math.max(1, ...series.map((x) => x.ok + x.err));
+  const short = (d) => d.slice(8) + '/' + d.slice(5, 7);
+  return `<div><div class="spark" role="img" aria-label="Appels par jour sur 14 jours">${series.map((x) => `<i class="${x.ok + x.err ? '' : 'zero'} ${x.err ? 'err' : ''}" style="height:${Math.max(5, ((x.ok + x.err) / max) * 100)}%" title="${x.d} : ${x.ok} réussis, ${x.err} erreurs"></i>`).join('')}</div>
+    <div class="spark-l"><span>${short(series[0].d)}</span><span>appels / jour · pic ${max}</span><span>aujourd'hui</span></div></div>`;
+}
+function modelRows(pid) {
+  const c = usageData.providers.find((x) => x.id === pid).check;
+  const f = (modelFilter[pid] || '').toLowerCase();
+  const list = c.models.filter((m) => m.toLowerCase().includes(f));
+  return list.map((m) => `<div class="mrow"><code>${esc(m)}</code><button class="btn" data-act="useModel" data-pid="${pid}" data-model="${esc(m)}" data-as="imageModel">Image</button><button class="btn" data-act="useModel" data-pid="${pid}" data-model="${esc(m)}" data-as="editModel">Réf.</button><button class="btn" data-act="useModel" data-pid="${pid}" data-model="${esc(m)}" data-as="chatModel">Texte</button></div>`).join('') || '<p class="fine">Aucun modèle ne correspond.</p>';
+}
+function checkHtml(c, pid) {
+  if (!c) return '';
+  const badge = c.valid === true ? '<span class="pill done">Valide</span>' : c.valid === false ? '<span class="pill error">Refusée</span>' : '<span class="pill paused">Non vérifiable</span>';
+  const kv = Object.entries(c.info || {});
+  return `<div class="chk"><div class="uc-head" style="align-items:center"><div>${badge} <span style="font-size:13px">${esc(c.detail)}</span></div><span class="fine" style="margin:0">${ago(c.at)}</span></div>
+    ${kv.length ? `<dl class="kv">${kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+    ${pid && c.models && c.models.length ? `<details style="margin-top:10px"><summary style="margin:0">Modèles disponibles (${c.models.length})</summary>
+      <input type="text" data-mf="${pid}" placeholder="Filtrer (ex : flux, image, kontext)" value="${esc(modelFilter[pid] || '')}" style="margin-top:8px">
+      <div class="models" id="ml-${pid}">${modelRows(pid)}</div><p class="fine">Clique sur un rôle pour définir ce modèle comme modèle image, avec références ou texte.</p></details>` : ''}</div>`;
+}
+function provCard(p) {
+  const t = p.today, q = p.quota;
+  const lat = p.latencyMs ? (p.latencyMs / 1000).toFixed(1) + ' s' : '—';
+  return `<div class="uc" data-pid="${p.id}">
+    <div class="uc-head"><div><h3>${esc(p.label)}</h3><div class="meta">image : ${esc(p.imageModel || 'défaut')} · texte : ${esc(p.chatModel || '—')}</div></div>
+      <span class="pill ${p.hasKey ? 'done' : 'paused'}">${p.hasKey ? 'Clé ' + esc(p.keyHint) + (p.keyFromEnv ? ' (env)' : '') : 'Sans clé'}</span></div>
+    ${meter('Quota cette minute' + (q.cooling ? ` · ralenti après un 429 (${Math.ceil(q.cooling / 1000)} s)` : ''), q.used, q.limit, `${q.used} / ${q.limit}`)}
+    ${p.dailyLimit ? meter('Images aujourd\'hui', t.image.ok, p.dailyLimit, `${t.image.ok} / ${p.dailyLimit}`) : `<div class="meter"><div class="row"><span>Images aujourd'hui</span><b>${t.image.ok}</b></div><div class="fine" style="margin:0">Pas de limite quotidienne configurée (Réglages › Avancé).</div></div>`}
+    <div class="stats">
+      <div class="stat"><span>Images</span><b>${t.image.ok}</b>${t.image.err ? `<em>${t.image.err} err.</em>` : ''}</div>
+      <div class="stat"><span>Texte (IA)</span><b>${t.chat.ok}</b>${t.chat.err ? `<em>${t.chat.err} err.</em>` : ''}</div>
+      <div class="stat"><span>Voix</span><b>${t.tts.ok}</b>${t.tts.err ? `<em>${t.tts.err} err.</em>` : ''}</div>
+    </div>
+    <div class="fine" style="margin:0">7 jours : ${p.week.ok} réussis · ${p.week.err} erreurs · latence image ~${lat} · dernier appel ${ago(p.last && p.last.at)}</div>
+    ${spark(p.series)}
+    ${p.last && p.last.err ? `<div class="lasterr"><b>Dernière erreur</b> (${ago(p.last.err.at)}${p.last.err.status ? ', HTTP ' + p.last.err.status : ''}) : ${esc(p.last.err.msg)}</div>` : ''}
+    ${checkHtml(p.check, p.id)}
+    <div class="actions tight" style="margin-top:0"><button class="btn sm" data-act="usageCheck" data-pid="${p.id}" ${p.hasKey ? '' : 'disabled'}>${ico('refresh')}Vérifier la clé et le compte</button><button class="btn sm ghost" data-go="settings">Configurer</button></div>
+  </div>`;
+}
+function renderUsage() {
+  const u = usageData;
+  if (!u) return;
+  const label = Object.fromEntries([...u.providers, ...u.services].map((x) => [x.id, x.label]));
+  const kind = { image: 'image', chat: 'texte', tts: 'voix', search: 'recherche' };
+  $('#usageBody').innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><span>Requêtes aujourd'hui</span><strong>${u.totals.calls}</strong><small>${u.totals.errors} erreur(s)${u.totals.calls ? ` · ${Math.round((u.totals.errors / u.totals.calls) * 100)} %` : ''}</small></div>
+      <div class="kpi"><span>Images générées aujourd'hui</span><strong>${u.totals.images}</strong></div>
+      <div class="kpi"><span>Instances actives</span><strong>${u.jobs.running + u.jobs.assembling}</strong><small>${u.jobs.total} au total${u.jobs.error ? ` · ${u.jobs.error} en erreur` : ''}</small></div>
+      <div class="kpi"><span>Stockage utilisé</span><strong>${bytes(u.storage.bytes)}</strong><small>${u.storage.videos} vidéo(s) · ${u.storage.assets} référence(s)</small></div>
+    </div>
+    <div class="section-head" style="margin-top:0"><h2>Fournisseurs d'images et de texte</h2></div>
+    <div class="uprov">${u.providers.map(provCard).join('')}</div>
+    <div class="section-head"><h2>Services audio</h2></div>
+    <div class="card"><table class="utable"><thead><tr><th>Service</th><th>Clé</th><th>Aujourd'hui</th><th>7 jours</th><th>Dernier appel</th><th></th></tr></thead><tbody>
+      ${u.services.map((x) => `<tr><td>${esc(x.label)}</td><td>${x.keySet === null ? '<span class="muted">sans clé</span>' : x.keySet ? '<span class="good">configurée</span>' : '<span class="muted">manquante</span>'}</td>
+        <td>${x.today.ok} <span class="${x.today.err ? 'bad' : ''}">${x.today.err ? '· ' + x.today.err + ' err.' : ''}</span></td><td>${x.week.ok} · ${x.week.err} err.</td><td>${ago(x.last && x.last.at)}${x.last && x.last.err ? `<div class="bad">${esc(x.last.err.msg.slice(0, 80))}</div>` : ''}</td>
+        <td>${x.keySet ? `<button class="btn sm" data-act="usageCheck" data-service="${x.id}">Vérifier</button>` : ''}</td></tr>
+        ${x.check ? `<tr><td colspan="6">${checkHtml(x.check)}</td></tr>` : ''}`).join('')}
+    </tbody></table><p class="fine">Les voix Cloudflare et « API OpenAI » sont comptées dans la ligne « Voix » du fournisseur correspondant.</p></div>
+    <div class="section-head"><h2>Activité récente</h2><button class="btn sm ghost danger" data-act="usageReset">Réinitialiser les statistiques</button></div>
+    <div class="card" style="overflow:auto;max-height:440px">${u.events.length ? `<table class="utable"><thead><tr><th>Heure</th><th>Service</th><th>Type</th><th>Résultat</th><th>Durée</th><th>Détail</th></tr></thead><tbody>
+      ${u.events.map((e) => `<tr><td>${hhmm(e.t)}</td><td>${esc(label[e.service] || e.service)}</td><td>${kind[e.kind] || e.kind}</td><td class="${e.ok ? 'good' : 'bad'}">${e.ok ? 'OK' : 'Erreur' + (e.status ? ' ' + e.status : '')}</td><td>${e.ms ? (e.ms / 1000).toFixed(1) + ' s' : ''}</td><td class="${e.ok ? '' : 'bad'}">${esc(e.msg || '')}</td></tr>`).join('')}</tbody></table>` : '<p class="muted" style="margin:0">Aucun appel enregistré pour l\'instant.</p>'}</div>`;
+}
+async function loadUsage(force) {
+  try {
+    const d = await api('GET', '/api/usage');
+    const k = JSON.stringify(d.events) + JSON.stringify(d.providers.map((p) => [p.quota, p.today, p.check, p.last])) + JSON.stringify(d.services) + JSON.stringify(d.totals) + JSON.stringify(d.storage) + JSON.stringify(d.jobs);
+    usageData = d;
+    // pas de re-rendu pendant la saisie / quand un panneau est ouvert et rien n'a changé
+    if (force || (k !== usageKey && !$('#usageBody').contains(document.activeElement))) { const open = $$('#usageBody details[open]').map((x) => x.closest('.uc') ? x.closest('.uc').dataset.pid : 'svc'); renderUsage(); open.forEach((pid) => { const el = $(`#usageBody .uc[data-pid="${pid}"] details`); if (el) el.open = true; }); }
+    usageKey = k;
+  } catch (e) { if (!usageData) $('#usageBody').innerHTML = `<p class="note warn">${esc(e.message)}</p>`; }
+}
+function startUsage() { stopUsage(); loadUsage(true); usageTimer = setInterval(() => { if (!document.hidden) loadUsage(); }, 3000); }
+function stopUsage() { clearInterval(usageTimer); usageTimer = null; }
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (el.dataset.mf) { modelFilter[el.dataset.mf] = el.value; $(`#ml-${el.dataset.mf}`).innerHTML = modelRows(el.dataset.mf); }
+});
+
 /* ---------- Bibliothèque ---------- */
 function renderLibrary() {
   $('#libEmpty').hidden = !!library.length;
@@ -522,6 +618,7 @@ function renderSettings() {
       <details><summary>Avancé</summary>
         <div class="grid">
           ${field(id, 'baseUrl', 'URL de base de l\'API', p.baseUrl)}
+          ${field(id, 'dailyLimit', 'Limite quotidienne d\'images (0 = aucune)', p.dailyLimit || 0, 'number', 'min="0"')}
           ${p.type === 'openai' ? `<label>Envoi des références${sel(id, 'refMode', p.refMode, [['field', 'Dans la requête JSON (champ)'], ['edits', 'Endpoint /images/edits (multipart)'], ['none', 'Non supporté (texte → image)']])}</label>
           ${field(id, 'refField', 'Champ JSON des références', p.refField)}
           <label class="check"><input data-p="${id}" data-k="refArray" type="checkbox" ${p.refArray ? 'checked' : ''}><span>Références sous forme de tableau</span></label>
@@ -641,6 +738,20 @@ document.addEventListener('click', async (e) => {
       case 'jobAssemble': jobAction(job, 'assemble'); break;
       case 'jobFrames': openGallery(job); break;
       case 'jobConsole': openConsole(job); break;
+      case 'usageRefresh': loadUsage(true); break;
+      case 'usageCheck': {
+        const body = b.dataset.service ? { service: b.dataset.service } : { provider: b.dataset.pid };
+        const r = await withBusy(b, 'Vérification…', () => api('POST', '/api/usage/check', body));
+        await loadUsage(true);
+        toast(r.valid === true ? 'Clé valide ✔' : r.valid === false ? 'Clé refusée' : r.detail, r.valid === true ? 'ok' : 'err'); break;
+      }
+      case 'useModel': {
+        await saveSettings({ providers: { [b.dataset.pid]: { [b.dataset.as]: b.dataset.model } } }, `${b.dataset.model} défini comme modèle ${{ imageModel: 'image', editModel: 'avec références', chatModel: 'texte' }[b.dataset.as]}`);
+        loadUsage(true); break;
+      }
+      case 'usageReset':
+        if (!confirm('Remettre à zéro tous les compteurs d\'usage ?')) return;
+        await api('POST', '/api/usage/reset'); await loadUsage(true); break;
       case 'jobAudio': openAudio(job); break;
       case 'narrate': narrateInto(draft.scenes, draft.audio.voice.lang, (n) => { n.forEach((t, i) => { draft.scenes[i].narration = t; }); saveDraft(); renderStudio(); toast('Narration écrite', 'ok'); }, b); break;
       case 'mNarrate': {
@@ -742,6 +853,6 @@ function setConn(ok, msg) {
 renderStudio();
 renderJobs();
 const startTab = location.hash.slice(1);
-if (['studio', 'jobs', 'library', 'settings'].includes(startTab)) showTab(startTab);
+if (['studio', 'jobs', 'usage', 'library', 'settings'].includes(startTab)) showTab(startTab);
 poll();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(true); });

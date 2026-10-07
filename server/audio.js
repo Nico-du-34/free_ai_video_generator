@@ -8,6 +8,7 @@ const { spawn } = require('child_process');
 const store = require('./store');
 const media = require('./media');
 const providers = require('./providers');
+const usage = require('./usage');
 const { ApiError, retry, clamp } = require('./util');
 
 const LANGS = ['fr', 'en', 'es', 'de', 'it', 'pt'];
@@ -44,11 +45,22 @@ function chunks(text, max = 180) {
   push(cur);
   return out;
 }
-async function netFetch(url, opts, signal) {
+async function netFetch(url, opts, signal, service, kind = 'search') {
   const sig = signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000);
+  const t0 = Date.now();
   let r;
-  try { r = await fetch(url, { ...opts, signal: sig }); } catch (e) { if (signal && signal.aborted) throw e; throw new ApiError('Réseau : ' + ((e.cause && e.cause.message) || e.message), 0); }
-  if (!r.ok) throw new ApiError(`HTTP ${r.status} : ${(await r.text()).slice(0, 160)}`, r.status);
+  try { r = await fetch(url, { ...opts, signal: sig }); } catch (e) {
+    if (signal && signal.aborted) throw e;
+    const msg = 'Réseau : ' + ((e.cause && e.cause.message) || e.message);
+    if (service) usage.record({ service, kind, ok: false, msg });
+    throw new ApiError(msg, 0);
+  }
+  if (!r.ok) {
+    const text = (await r.text()).slice(0, 160);
+    if (service) usage.record({ service, kind, ok: false, status: r.status, msg: text });
+    throw new ApiError(`HTTP ${r.status} : ${text}`, r.status);
+  }
+  if (service) usage.record({ service, kind, ok: true, ms: Date.now() - t0, status: r.status });
   return r;
 }
 function espeak(text, lang, speed) {
@@ -56,8 +68,12 @@ function espeak(text, lang, speed) {
     const p = spawn('espeak-ng', ['-v', lang === 'pt' ? 'pt' : lang, '-s', String(Math.round(store.audioCfg().localSpeed * speed)), '--stdout', text]);
     const out = []; let err = '';
     p.stdout.on('data', (d) => out.push(d)); p.stderr.on('data', (d) => (err += d));
-    p.on('error', (e) => reject(new ApiError(e.code === 'ENOENT' ? 'espeak-ng n\'est pas installé (inclus dans l\'image Docker)' : e.message, 400)));
-    p.on('close', (c) => (c === 0 && out.length ? resolve(Buffer.concat(out)) : reject(new ApiError('espeak-ng : ' + err.slice(0, 120), 400))));
+    p.on('error', (e) => { usage.record({ service: 'espeak', kind: 'tts', ok: false, msg: e.message }); reject(new ApiError(e.code === 'ENOENT' ? 'espeak-ng n\'est pas installé (inclus dans l\'image Docker)' : e.message, 400)); });
+    p.on('close', (c) => {
+      if (c === 0 && out.length) { usage.record({ service: 'espeak', kind: 'tts', ok: true }); return resolve(Buffer.concat(out)); }
+      usage.record({ service: 'espeak', kind: 'tts', ok: false, msg: err.slice(0, 120) });
+      reject(new ApiError('espeak-ng : ' + err.slice(0, 120), 400));
+    });
   });
 }
 /** Retourne un Buffer audio (mp3/wav) pour le texte. */
@@ -67,7 +83,7 @@ async function tts(voice, text, signal) {
   if (voice.engine === 'google') {
     const bufs = [];
     for (const c of chunks(text)) {
-      const r = await netFetch(`${cfg.googleUrl}?ie=UTF-8&client=tw-ob&tl=${voice.lang}&q=${encodeURIComponent(c)}&ttsspeed=1`, { headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://translate.google.com/' } }, signal);
+      const r = await netFetch(`${cfg.googleUrl}?ie=UTF-8&client=tw-ob&tl=${voice.lang}&q=${encodeURIComponent(c)}&ttsspeed=1`, { headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://translate.google.com/' } }, signal, 'google-tts', 'tts');
       bufs.push(Buffer.from(await r.arrayBuffer()));
     }
     return Buffer.concat(bufs);
@@ -82,7 +98,7 @@ async function tts(voice, text, signal) {
   // openai : endpoint /audio/speech d'un fournisseur compatible OpenAI
   const pid = store.getSettings().providers[cfg.ttsProvider] ? cfg.ttsProvider : 'pollinations';
   const p = store.providerCfg(pid);
-  const r = await providers.call(pid, p.baseUrl + '/audio/speech', { json: { model: cfg.ttsModel || 'tts-1', input: text, voice: cfg.ttsVoice || 'nova', response_format: 'mp3', speed: voice.speed } }, signal);
+  const r = await providers.call(pid, p.baseUrl + '/audio/speech', { kind: 'tts', json: { model: cfg.ttsModel || 'tts-1', input: text, voice: cfg.ttsVoice || 'nova', response_format: 'mp3', speed: voice.speed } }, signal);
   if (/json/i.test(r.type)) throw new ApiError('Réponse inattendue : ' + r.buf.toString('utf8', 0, 160));
   return r.buf;
 }
@@ -108,13 +124,13 @@ async function download(kind, query, out, signal) {
   let url;
   if (kind === 'freesound') {
     if (!cfg.freesoundKey) throw new ApiError('Clé Freesound manquante (Réglages › Audio)', 400);
-    const j = await (await netFetch(`${cfg.freesoundUrl}/search/text/?query=${encodeURIComponent(query)}&filter=${encodeURIComponent('duration:[8 TO 240]')}&sort=rating_desc&page_size=5&fields=id,name,previews&token=${encodeURIComponent(cfg.freesoundKey)}`, {}, signal)).json();
+    const j = await (await netFetch(`${cfg.freesoundUrl}/search/text/?query=${encodeURIComponent(query)}&filter=${encodeURIComponent('duration:[8 TO 240]')}&sort=rating_desc&page_size=5&fields=id,name,previews&token=${encodeURIComponent(cfg.freesoundKey)}`, {}, signal, 'freesound')).json();
     const hit = (j.results || []).find((x) => x.previews && (x.previews['preview-hq-mp3'] || x.previews['preview-lq-mp3']));
     if (!hit) throw new ApiError(`Aucun son trouvé sur Freesound pour « ${query} »`, 404);
     url = hit.previews['preview-hq-mp3'] || hit.previews['preview-lq-mp3'];
   } else {
     if (!cfg.jamendoClientId) throw new ApiError('Client ID Jamendo manquant (Réglages › Audio)', 400);
-    const j = await (await netFetch(`${cfg.jamendoUrl}/tracks/?client_id=${encodeURIComponent(cfg.jamendoClientId)}&format=json&limit=5&search=${encodeURIComponent(query)}&audioformat=mp32&order=popularity_total`, {}, signal)).json();
+    const j = await (await netFetch(`${cfg.jamendoUrl}/tracks/?client_id=${encodeURIComponent(cfg.jamendoClientId)}&format=json&limit=5&search=${encodeURIComponent(query)}&audioformat=mp32&order=popularity_total`, {}, signal, 'jamendo')).json();
     const hit = (j.results || []).find((x) => x.audio);
     if (!hit) throw new ApiError(`Aucune musique trouvée sur Jamendo pour « ${query} »`, 404);
     url = hit.audio;
