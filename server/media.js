@@ -50,4 +50,19 @@ async function encodeVideo(seqPattern, o, outFile, total, onProgress) {
   ], { onLine: (l) => { const m = /^frame=(\d+)/.exec(l); if (m && onProgress) onProgress(Math.min(1, +m[1] / total)); } });
 }
 
-module.exports = { ffmpeg, toPng, toJpeg, encodeVideo };
+function duration(file) {
+  return new Promise((resolve, reject) => {
+    const p = spawn('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file]);
+    let out = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.on('error', (e) => reject(new Error(e.code === 'ENOENT' ? 'ffprobe introuvable' : e.message)));
+    p.on('close', () => { const v = parseFloat(out); v > 0 ? resolve(v) : reject(new Error('audio illisible')); });
+  });
+}
+async function toMp3(buf) {
+  const out = await ffmpeg(['-i', 'pipe:0', '-vn', '-ac', '1', '-ar', '44100', '-c:a', 'libmp3lame', '-q:a', '4', '-f', 'mp3', 'pipe:1'], { input: buf });
+  if (!out.length) throw new Error('Audio illisible');
+  return out;
+}
+
+module.exports = { ffmpeg, toPng, toJpeg, encodeVideo, duration, toMp3 };

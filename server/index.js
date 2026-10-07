@@ -8,6 +8,7 @@ const store = require('./store');
 const engine = require('./engine');
 const providers = require('./providers');
 const media = require('./media');
+const audio = require('./audio');
 const { uid, retry, ApiError } = require('./util');
 
 const PORT = +process.env.PORT || 8080;
@@ -111,6 +112,23 @@ async function api(req, res, url) {
     const jpg = await media.toJpeg(buf, 1024);
     return send(res, 200, { image: 'data:image/jpeg;base64,' + jpg.toString('base64'), ms: Date.now() - t0, prompt });
   }
+  if (p === '/api/audio/preview' && m === 'POST') {
+    const b = await readJson(req);
+    const mp3 = await audio.previewVoice(b.voice, b.text);
+    return send(res, 200, { audio: 'data:audio/mpeg;base64,' + mp3.toString('base64') });
+  }
+  if (p === '/api/audio/ambient-preview' && m === 'POST') {
+    const b = await readJson(req);
+    const mp3 = await audio.previewAmbient(b.ambient, path.join(store.DATA, 'tmp'));
+    return send(res, 200, { audio: 'data:audio/mpeg;base64,' + mp3.toString('base64') });
+  }
+  if (p === '/api/narrate' && m === 'POST') {
+    const b = await readJson(req);
+    if (!Array.isArray(b.scenes) || !b.scenes.length || b.scenes.length > 50) throw engine.httpError(400, 'Scènes invalides');
+    const scenes = b.scenes.map((s) => ({ prompt: String(s.prompt || '').slice(0, 1500), duration: Math.max(0.5, +s.duration || 3) }));
+    if (scenes.some((s) => !s.prompt.trim())) throw engine.httpError(400, 'Chaque scène doit avoir un prompt');
+    return send(res, 200, { narrations: await providers.narrate(b.provider, scenes, audio.LANGS.includes(b.lang) ? b.lang : 'fr') });
+  }
   if (p === '/api/assets' && m === 'POST') {
     const raw = await readBody(req, 15e6);
     if (!raw.length) throw engine.httpError(400, 'Fichier vide');
@@ -137,6 +155,11 @@ async function api(req, res, url) {
       engine.assemble(job); return send(res, 202, engine.slim(job));
     }
     if (action === 'clone' && m === 'POST') return send(res, 201, engine.slim(engine.cloneJob(job)));
+    if (action === 'audio' && m === 'POST') {
+      const b = await readJson(req);
+      await engine.remix(job, b.audio, b.narrations);
+      return send(res, 202, engine.slim(job));
+    }
     if (action === 'log' && m === 'GET') return send(res, 200, engine.logLines(job, +url.searchParams.get('since') || 0));
     if (action === 'series' && m === 'POST') {
       const b = await readJson(req);

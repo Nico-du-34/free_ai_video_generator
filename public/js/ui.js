@@ -149,11 +149,14 @@ function renderStudio() {
         <label>État final <span class="opt">optionnel</span><input type="text" data-f="endPrompt" value="${esc(s.endPrompt)}" placeholder="ex : le soleil se couche"></label>
         <label>Durée (s)<input type="number" data-f="duration" min="0.5" max="600" step="0.5" value="${s.duration}"></label>
       </div>
+      <label style="margin-top:12px">Narration <span class="opt">voix off, optionnel</span>
+        <textarea data-f="narration" rows="2" placeholder="Ce que la voix dit pendant cette scène">${esc(s.narration || '')}</textarea></label>
       ${refsHtml(s.refs, i)}
     </div>`).join('');
   $('#libPick').innerHTML = '<option value="">Ajouter depuis la bibliothèque…</option>' + library.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
   renderProviderHint();
   renderSimple();
+  renderSound();
   renderEstimate();
 }
 function renderProviderHint() {
@@ -260,7 +263,7 @@ async function launch(btn) {
   const p = providers()[draft.provider];
   if (p && !p.hasKey) { toast(`Ajoute d'abord la clé ${p.label}`, 'err'); return showTab('settings'); }
   try {
-    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, size: effSize(), title: (!draft.title || draft.title === 'Ma vidéo') ? draft.scenes[0].prompt.trim().slice(0, 50) : draft.title, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs }) => ({ name, prompt, motion, endPrompt, duration, refs })) }));
+    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, size: effSize(), title: (!draft.title || draft.title === 'Ma vidéo') ? draft.scenes[0].prompt.trim().slice(0, 50) : draft.title, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs, narration }) => ({ name, prompt, motion, endPrompt, duration, refs, narration })) }));
     server.jobs.unshift(job);
     toast(`« ${job.title} » lancée : ${job.done.length} images. Tu peux quitter la page.`, 'ok');
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -284,6 +287,7 @@ function jobCardHtml(j) {
         <button class="btn sm" data-act="jobAssemble" data-r="asm">${ico('clapper')}Assembler</button>
         <a class="btn sm primary" data-r="dl" download>${ico('download')}Vidéo</a>
         <button class="btn sm" data-act="jobFrames">${ico('image')}Images</button>
+        <button class="btn sm" data-act="jobAudio">${ico('volume')}Audio</button>
         <button class="btn sm" data-act="jobConsole">${ico('terminal')}Console</button>
         <button class="btn sm" data-act="jobSeries">${ico('layers')}Série</button>
         <button class="icon-btn" data-act="jobClone" title="Relancer une copie">${ico('copy')}</button>
@@ -301,7 +305,7 @@ function updateJobCard(j) {
   const label = (providers()[j.provider] || {}).label || j.provider;
   r('title').textContent = j.title;
   const st = r('status'); st.textContent = STATUS[j.status] || j.status; st.className = 'pill ' + j.status;
-  r('meta').textContent = `${label} · ${j.fps} fps · ${j.size} · ${j.scenes.length} scène(s) · ${MODE_LABEL[j.mode]}${j.keyEvery > 1 ? ` · 1 image IA sur ${j.keyEvery}` : ''} · ${(vframes / j.fps).toFixed(1)} s`;
+  r('meta').textContent = `${label} · ${j.fps} fps · ${j.size} · ${j.scenes.length} scène(s) · ${MODE_LABEL[j.mode]}${j.keyEvery > 1 ? ` · 1 image IA sur ${j.keyEvery}` : ''} · ${(vframes / j.fps).toFixed(1)} s${j.video && j.video.audio ? ' · 🔊 audio' : ''}`;
   const sc = r('series'); sc.hidden = !j.series; if (j.series) sc.textContent = `Série « ${j.series.title} » · épisode ${j.series.ep}/${j.series.of}`;
   const pct = j.status === 'assembling' ? (j.assemble || 0) * 100 : (n / total) * 100;
   r('bar').style.width = pct + '%';
@@ -382,6 +386,69 @@ function openConsole(j) {
       await new Promise((r) => setTimeout(r, 1000));
     }
   })();
+}
+
+
+/* ---------- Son : voix off + ambiance ---------- */
+const ENGINES = [['google', 'Google Traduction (gratuit)'], ['local', 'Voix locale (hors-ligne)'], ['cloudflare', 'Cloudflare MeloTTS'], ['openai', 'API compatible OpenAI']];
+const LANGS = [['fr', 'Français'], ['en', 'English'], ['es', 'Español'], ['de', 'Deutsch'], ['it', 'Italiano'], ['pt', 'Português']];
+const AMBIENTS = [['rain', 'Pluie'], ['wind', 'Vent'], ['ocean', 'Océan'], ['fire', 'Feu de camp'], ['forest', 'Forêt la nuit'], ['city', 'Ville (grondement)'], ['space', 'Espace (nappe)'], ['pad', 'Musique douce (nappe)']];
+let modalAudio = null, player = null;
+function audioUiHtml(a, target) {
+  const o = (v, l, cur) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${l}</option>`;
+  const k = a.ambient.kind, au = (server.settings && server.settings.audio) || {};
+  const missing = (k === 'freesound' && !au.freesoundKeySet) ? 'Freesound' : (k === 'jamendo' && !au.jamendoClientIdSet) ? 'Jamendo' : '';
+  return `<div class="audio-ui" data-target="${target}"><div class="grid">
+    <label>Voix<select data-au="voice.engine">${ENGINES.map(([v, l]) => o(v, l, a.voice.engine)).join('')}</select></label>
+    <label>Langue<select data-au="voice.lang">${LANGS.map(([v, l]) => o(v, l, a.voice.lang)).join('')}</select></label>
+    <label>Volume de la voix<input type="range" data-au="voice.volume" min="0" max="150" step="5" value="${Math.round(a.voice.volume * 100)}"></label>
+    <label>Ambiance<select data-au="ambient.kind">${o('none', 'Aucune', k)}${o('synth', 'Sons générés (gratuit)', k)}${o('freesound', 'Freesound (recherche)', k)}${o('jamendo', 'Jamendo (musique)', k)}</select>
+      ${missing ? `<a href="#settings" data-go="settings" class="warn-link">Ajouter la clé ${missing} dans Réglages › Audio</a>` : ''}</label>
+    ${k === 'synth' ? `<label>Type de son<select data-au="ambient.preset">${AMBIENTS.map(([v, l]) => o(v, l, a.ambient.preset)).join('')}</select></label>` : ''}
+    ${k === 'freesound' || k === 'jamendo' ? `<label>Recherche<input type="text" data-au="ambient.query" value="${esc(a.ambient.query)}" placeholder="ex : forêt, pluie, piano calme"></label>` : ''}
+    ${k !== 'none' ? `<label>Volume de l'ambiance<input type="range" data-au="ambient.volume" min="0" max="100" step="5" value="${Math.round(a.ambient.volume * 100)}"></label>` : ''}
+    <label class="check wide"><input type="checkbox" data-au="duck" ${a.duck ? 'checked' : ''}><span>Baisser l'ambiance quand la voix parle</span></label>
+  </div>
+  <div class="actions tight"><button class="btn sm" data-act="voicePreview">${ico('volume')}Aperçu de la voix</button>${k !== 'none' ? `<button class="btn sm" data-act="ambPreview">${ico('volume')}Aperçu de l'ambiance</button>` : ''}</div></div>`;
+}
+const audioOf = (el) => (el.closest('.audio-ui').dataset.target === 'draft' ? draft.audio : modalAudio);
+function renderSound() {
+  const multi = draft.scenes.length > 1, sn = $('#sNarr');
+  $('#narrArea').hidden = !(draft.simple && !multi);
+  if (document.activeElement !== sn) sn.value = draft.scenes[0].narration || '';
+  if (!$('#soundUi').contains(document.activeElement)) $('#soundUi').innerHTML = audioUiHtml(draft.audio, 'draft');
+}
+function setAu(a, path, v) { const [g, k] = path.split('.'); if (k) a[g][k] = v; else a[g] = v; saveDraft(); }
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (el.id === 'sNarr') { draft.scenes[0].narration = el.value; saveDraft(); }
+  if (el.dataset.mn !== undefined) return;
+  if (el.dataset.au && (el.type === 'range' || el.type === 'text')) setAu(audioOf(el), el.dataset.au, el.type === 'range' ? +el.value / 100 : el.value);
+});
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  if (!el.dataset.au || el.type === 'range' || el.type === 'text') return;
+  const a = audioOf(el), box = el.closest('.audio-ui');
+  setAu(a, el.dataset.au, el.type === 'checkbox' ? el.checked : el.value);
+  if (el.dataset.au === 'ambient.kind') box.outerHTML = audioUiHtml(a, box.dataset.target);
+});
+function playDataUrl(u) { if (player) player.pause(); player = new Audio(u); player.play().catch(() => toast('Lecture bloquée par le navigateur', 'err')); }
+async function narrateInto(scenes, lang, apply, btn) {
+  if (scenes.some((s) => !s.prompt.trim())) return toast('Chaque scène doit avoir un prompt', 'err');
+  try {
+    const r = await withBusy(btn, 'Écriture…', () => api('POST', '/api/narrate', { provider: draft.provider, lang, scenes: scenes.map((s) => ({ prompt: s.prompt, duration: s.duration })) }));
+    apply(r.narrations);
+  } catch (e) { toast('Narration : ' + e.message, 'err'); }
+}
+function openAudio(job) {
+  modalAudio = JSON.parse(JSON.stringify(job.audio || newAudio()));
+  openModal(`<h2>Audio · ${esc(job.title)}</h2>
+    <p class="fine" style="margin-top:0">Modifie la voix et l'ambiance, puis applique : la vidéo est remixée sans régénérer les images.${job.video ? '' : ' (Pas encore de vidéo : pris en compte à l\'assemblage.)'}</p>
+    ${job.scenes.map((s, i) => `<label style="margin-top:12px">Narration · ${esc(s.name)} <span class="opt">${s.duration} s</span><textarea data-mn="${i}" rows="2" placeholder="(sans voix)">${esc(s.narration || '')}</textarea></label>`).join('')}
+    <div class="actions tight"><button class="btn sm" data-act="mNarrate">${ico('sparkles')}Écrire la narration avec l'IA</button></div>
+    <div style="margin-top:14px">${audioUiHtml(modalAudio, 'modal')}</div>
+    <div class="actions sticky-foot"><button class="btn primary" data-act="audioApply" style="margin-left:auto">Appliquer à la vidéo</button></div>`, () => { modalAudio = null; if (player) player.pause(); });
+  $('#modalBody').dataset.job = job.id;
 }
 
 /* ---------- Série : idées de prochains épisodes ---------- */
@@ -477,6 +544,26 @@ function renderSettings() {
         <label class="wide">Consigne d'enrichissement des prompts<textarea id="gEnhance" rows="4">${esc(s.enhancePrompt)}</textarea></label>
       </div>
       <div class="actions"><button class="btn primary" data-act="saveGeneral">Enregistrer</button><button class="btn ghost danger" data-act="resetLocal">Vider le brouillon et la bibliothèque</button></div>
+    </div>
+    <div class="card" id="audioSettings">
+      <div class="card-title">Audio · voix et ambiance</div>
+      <p class="fine" style="margin-top:0">Voix : Google Traduction (gratuit, sans clé), voix locale espeak (incluse dans Docker), Cloudflare MeloTTS (même clé que ci-dessus) ou endpoint <code>/audio/speech</code> d'un fournisseur compatible OpenAI. Ambiances : sons générés (gratuit, sans clé), <a href="https://freesound.org/apiv2/apply" target="_blank" rel="noopener">Freesound</a> (clé gratuite) et <a href="https://devportal.jamendo.com" target="_blank" rel="noopener">Jamendo</a> (client ID gratuit).</p>
+      <div class="grid">
+        <label>Clé Freesound<input data-a="freesoundKey" type="password" autocomplete="off" placeholder="${s.audio.freesoundKeySet ? 'Clé ' + esc(s.audio.freesoundKeyHint) + ' enregistrée' : 'Colle ta clé'}"></label>
+        <label>Client ID Jamendo<input data-a="jamendoClientId" type="password" autocomplete="off" placeholder="${s.audio.jamendoClientIdSet ? 'ID ' + esc(s.audio.jamendoClientIdHint) + ' enregistré' : 'Colle ton client ID'}"></label>
+        <label>Fournisseur de voix « OpenAI »<select data-a="ttsProvider">${Object.entries(s.providers).filter(([, p]) => p.type === 'openai').map(([id, p]) => `<option value="${id}" ${s.audio.ttsProvider === id ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select></label>
+        <label>Modèle de voix<input data-a="ttsModel" type="text" value="${esc(s.audio.ttsModel)}"></label>
+        <label>Nom de la voix<input data-a="ttsVoice" type="text" value="${esc(s.audio.ttsVoice)}"></label>
+        <label>Vitesse de la voix locale<input data-a="localSpeed" type="number" min="80" max="300" value="${s.audio.localSpeed}"><small>mots par minute (espeak)</small></label>
+      </div>
+      <details><summary>Avancé</summary><div class="grid">
+        <label>URL Google TTS<input data-a="googleUrl" type="text" value="${esc(s.audio.googleUrl)}"></label>
+        <label>URL API Freesound<input data-a="freesoundUrl" type="text" value="${esc(s.audio.freesoundUrl)}"></label>
+        <label>URL API Jamendo<input data-a="jamendoUrl" type="text" value="${esc(s.audio.jamendoUrl)}"></label>
+      </div></details>
+      <div class="actions"><button class="btn primary" data-act="saveAudio">Enregistrer</button>
+        ${s.audio.freesoundKeySet ? '<button class="btn ghost danger" data-act="clearAudioKey" data-k="freesoundKey">Supprimer la clé Freesound</button>' : ''}
+        ${s.audio.jamendoClientIdSet ? '<button class="btn ghost danger" data-act="clearAudioKey" data-k="jamendoClientId">Supprimer l\'ID Jamendo</button>' : ''}</div>
     </div>`;
 }
 function provPatch(card) {
@@ -554,6 +641,31 @@ document.addEventListener('click', async (e) => {
       case 'jobAssemble': jobAction(job, 'assemble'); break;
       case 'jobFrames': openGallery(job); break;
       case 'jobConsole': openConsole(job); break;
+      case 'jobAudio': openAudio(job); break;
+      case 'narrate': narrateInto(draft.scenes, draft.audio.voice.lang, (n) => { n.forEach((t, i) => { draft.scenes[i].narration = t; }); saveDraft(); renderStudio(); toast('Narration écrite', 'ok'); }, b); break;
+      case 'mNarrate': {
+        const j = server.jobs.find((x) => x.id === $('#modalBody').dataset.job);
+        narrateInto(j.scenes, modalAudio.voice.lang, (n) => $$('[data-mn]').forEach((t, i) => { t.value = n[i]; }), b); break;
+      }
+      case 'voicePreview': {
+        const box = b.closest('.audio-ui'), a = audioOf(b), isDraft = box.dataset.target === 'draft';
+        const text = isDraft ? draft.scenes[0].narration : ($('[data-mn]') || {}).value;
+        const r = await withBusy(b, 'Génération…', () => api('POST', '/api/audio/preview', { voice: a.voice, text: (text || '').slice(0, 300) }));
+        playDataUrl(r.audio); break;
+      }
+      case 'ambPreview': { const r = await withBusy(b, 'Génération…', () => api('POST', '/api/audio/ambient-preview', { ambient: audioOf(b).ambient })); playDataUrl(r.audio); break; }
+      case 'audioApply': {
+        const id = $('#modalBody').dataset.job;
+        const j = await withBusy(b, 'Application…', () => api('POST', `/api/jobs/${id}/audio`, { audio: modalAudio, narrations: $$('[data-mn]').map((t) => t.value) }));
+        const cur = server.jobs.find((x) => x.id === id); if (cur) Object.assign(cur, j);
+        closeModal(); renderJobs(); poll(true); toast('Audio appliqué, remixage en cours…', 'ok'); break;
+      }
+      case 'saveAudio': {
+        const o = {};
+        $$('[data-a]').forEach((el) => { const k = el.dataset.a; if (el.type === 'password') { if (el.value.trim()) o[k] = el.value; } else o[k] = el.type === 'number' ? +el.value : el.value; });
+        await saveSettings({ audio: o }, 'Réglages audio enregistrés'); break;
+      }
+      case 'clearAudioKey': await saveSettings({ audio: { ['clear_' + b.dataset.k]: true } }, 'Clé supprimée'); break;
       case 'jobSeries': openSeries(job); break;
       case 'conCopy': window.__copyConsole(); break;
       case 'serGen': serGenerate(); break;

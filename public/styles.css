@@ -206,3 +206,9 @@ details.prov[open]>summary{margin-bottom:14px}
 .prov .sum-l{display:flex;gap:10px;align-items:center;flex:1}
 details details{margin-top:14px}
 .sticky-foot{position:sticky;bottom:-22px;background:var(--surface);padding:14px 0 2px;margin-top:8px;border-top:1px solid var(--line)}
+
+/* son */
+#soundUi{margin-top:16px}
+.audio-ui input[type=range]{width:100%;margin-top:10px;accent-color:var(--acc)}
+.audio-ui .warn-link{display:block;margin-top:4px;font-size:12px}
+#narrArea[hidden]{display:none}

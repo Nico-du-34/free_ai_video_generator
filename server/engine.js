@@ -6,6 +6,7 @@ const path = require('path');
 const store = require('./store');
 const providers = require('./providers');
 const media = require('./media');
+const audio = require('./audio');
 const { clamp, uid, retry } = require('./util');
 
 const jobs = new Map();
@@ -18,6 +19,8 @@ const jobDir = (id) => path.join(store.dirs.jobs, id);
 const framesDir = (id) => path.join(jobDir(id), 'frames');
 const framePath = (id, i) => path.join(framesDir(id), String(i + 1).padStart(5, '0') + '.png');
 const videoPath = (id) => path.join(jobDir(id), 'video.mp4');
+const silentPath = (id) => path.join(jobDir(id), 'video_silent.mp4');
+const audioDir = (id) => path.join(jobDir(id), 'audio');
 const assetPath = (id) => path.join(store.dirs.assets, id + '.jpg');
 const httpError = (status, msg) => Object.assign(new Error(msg), { status });
 
@@ -74,12 +77,12 @@ function createJob(spec) {
     mode: noRefs ? 'none' : MODES.includes(spec.mode) ? spec.mode : 'chain',
     concurrency: clamp(Math.max(Math.round(+spec.concurrency) || 1, noRefs ? 3 : 1), 1, 6), keyEvery: clamp(Math.round(+spec.keyEvery) || 1, 1, 6),
     style: str(spec.style, 500).trim(),
-    enrichAuto: !!spec.enrichAuto, enriched: false, globalRefs: validRefs(spec.globalRefs),
+    enrichAuto: !!spec.enrichAuto, enriched: false, globalRefs: validRefs(spec.globalRefs), audio: audio.normalize(spec.audio),
     series: spec.series && store.ID_RE.test(spec.series.id || '') ? { id: spec.series.id, title: str(spec.series.title, 120), ep: +spec.series.ep || 1, of: +spec.series.of || 1 } : null,
     scenes: spec.scenes.map((s, i) => {
       const prompt = str(s.prompt, 4000).trim();
       if (!prompt) throw httpError(400, `La scène #${i + 1} n'a pas de prompt`);
-      return { name: str(s.name, 80) || 'Scène ' + (i + 1), prompt, motion: str(s.motion, 500).trim(), endPrompt: str(s.endPrompt, 500).trim(), duration: clamp(+s.duration || 3, 0.5, 600), refs: validRefs(s.refs) };
+      return { name: str(s.name, 80) || 'Scène ' + (i + 1), prompt, motion: str(s.motion, 500).trim(), endPrompt: str(s.endPrompt, 500).trim(), duration: clamp(+s.duration || 3, 0.5, 600), refs: validRefs(s.refs), narration: str(s.narration, 1500).trim() };
     }),
     done: '', error: '', note: '', video: null, lastFrame: -1, spf: 0, assemble: 0, log: [], logSeq: 0,
   };
@@ -164,6 +167,11 @@ class Runner {
     persist(job, true);
     if (job.enrichAuto && !job.enriched) await this.enrich();
     if (this.ctl.signal.aborted) return;
+    if (audio.hasAudio(job)) {   // voix et ambiance sont préparées pendant que les images se génèrent
+      audio.prepare(job, audioDir(job.id), this.ctl.signal)
+        .then((r) => r && log(job, 'ok', `🔊 Audio prêt : ${r.voices.length} voix, ambiance ${r.ambient ? 'oui' : 'non'}`))
+        .catch((e) => { if (e.name !== 'AbortError') log(job, 'warn', 'Préparation audio : ' + e.message); });
+    }
     const conc = job.mode === 'chain' ? 1 : clamp(job.concurrency, 1, 6);
     await Promise.all(Array.from({ length: conc }, () => this.worker()));
     if (this.ctl.signal.aborted) return;
@@ -265,6 +273,43 @@ function pause(job) {
   persist(job, true);
 }
 
+/** Vidéo finale = vidéo muette + mixage audio (si configuré) ; en cas d'échec audio on garde la version muette. */
+async function finalizeVideo(job) {
+  const out = videoPath(job.id), tmp = out + '.tmp.mp4';
+  job.videoAudio = false;
+  if (audio.hasAudio(job)) {
+    job.assemble = 0.92;
+    log(job, 'info', '🔊 Mixage de la voix et de l\'ambiance…');
+    try { await audio.mix(job, audioDir(job.id), silentPath(job.id), tmp); await fsp.rename(tmp, out); job.videoAudio = true; return; } catch (e) {
+      log(job, 'warn', 'Audio ignoré (vidéo muette conservée) : ' + e.message);
+      job.note = 'Audio ignoré : ' + e.message;
+      await fsp.rm(tmp, { force: true });
+    }
+  }
+  await fsp.copyFile(silentPath(job.id), out);
+}
+
+/** Applique de nouveaux réglages audio sur une vidéo déjà assemblée (sans régénérer les images). */
+async function remix(job, newAudio, narrations) {
+  if (job.status === 'running' || job.status === 'assembling') throw httpError(409, 'Instance occupée');
+  job.audio = audio.normalize(newAudio);
+  if (Array.isArray(narrations)) job.scenes.forEach((s, i) => { if (typeof narrations[i] === 'string') s.narration = narrations[i].slice(0, 1500).trim(); });
+  log(job, 'info', '🔊 Nouveaux réglages audio appliqués');
+  if (!fs.existsSync(silentPath(job.id))) { persist(job, true); return; }   // pas encore de vidéo : pris en compte à l'assemblage
+  const prev = job.status;
+  job.status = 'assembling'; job.error = ''; job.note = ''; job.assemble = 0.5;
+  persist(job, true);
+  try {
+    await finalizeVideo(job);
+    const st = await fsp.stat(videoPath(job.id));
+    job.video = { ...(job.video || { frames: 0 }), size: st.size, at: Date.now(), audio: !!job.videoAudio };
+    log(job, 'ok', `✓ Audio appliqué${job.videoAudio ? '' : ' (aucune piste audio)'}`);
+  } catch (e) { job.error = 'Audio : ' + e.message; log(job, 'err', job.error); }
+  job.status = job.error ? 'error' : (prev === 'error' ? 'paused' : prev);
+  job.assemble = 0;
+  persist(job, true);
+}
+
 async function assemble(job) {
   if (job.status === 'assembling') return;
   job.status = 'assembling'; job.error = ''; job.note = ''; job.assemble = 0;
@@ -285,15 +330,16 @@ async function assemble(job) {
       await fsp.symlink(framePath(job.id, last), path.join(seq, String(k + 1).padStart(5, '0') + '.png'));
     }
     const interp = job.keyEvery > 1 && idxs.length < total;
-    const out = videoPath(job.id) + '.tmp.mp4';
+    const out = silentPath(job.id) + '.tmp.mp4';
     await media.encodeVideo(path.join(seq, '%05d.png'), {
       inFps: interp ? job.fps * idxs.length / total : job.fps, outFps: job.fps, interp: interp ? INTERP : null,
-    }, out, total, (p) => { job.assemble = p; });
-    await fsp.rename(out, videoPath(job.id));
+    }, out, total, (p) => { job.assemble = p * 0.9; });
+    await fsp.rename(out, silentPath(job.id));
+    await finalizeVideo(job);
     const st = await fsp.stat(videoPath(job.id));
-    job.video = { size: st.size, at: Date.now(), frames };
+    job.video = { size: st.size, at: Date.now(), frames, audio: !!job.videoAudio };
     job.status = job.done.includes('0') ? 'paused' : 'done';
-    log(job, 'ok', `✓ Vidéo prête : ${(st.size / 1048576).toFixed(1)} Mo en ${((Date.now() - t0) / 1000).toFixed(1)} s${interp ? ' (interpolation ' + INTERP + ')' : ''}`);
+    log(job, 'ok', `✓ Vidéo prête : ${(st.size / 1048576).toFixed(1)} Mo en ${((Date.now() - t0) / 1000).toFixed(1)} s${interp ? ' (interpolation ' + INTERP + ')' : ''}${job.videoAudio ? ' · avec audio' : ''}`);
   } catch (e) {
     job.status = 'error'; job.error = 'Assemblage : ' + e.message; log(job, 'err', job.error);
   }
@@ -326,4 +372,4 @@ function boot() {
 const list = () => [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt).map(slim);
 const get = (id) => jobs.get(id);
 
-module.exports = { boot, list, get, slim, createJob, cloneJob, seriesIdeas, createSeries, logLines, start, pause, assemble, remove, flushAll, framePrompt, plan, framePath, videoPath, assetPath, httpError };
+module.exports = { audioDir, remix, boot, list, get, slim, createJob, cloneJob, seriesIdeas, createSeries, logLines, start, pause, assemble, remove, flushAll, framePrompt, plan, framePath, videoPath, assetPath, httpError };

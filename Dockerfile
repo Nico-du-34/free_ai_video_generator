@@ -1,8 +1,8 @@
 ARG NODE_IMAGE=node:22-alpine
 FROM ${NODE_IMAGE}
 
-# ffmpeg : conversion des images et assemblage de la vidéo
-RUN apk add --no-cache ffmpeg tini
+# ffmpeg : images, assemblage vidéo, mixage audio · espeak-ng : voix locale hors-ligne
+RUN apk add --no-cache ffmpeg espeak-ng tini
 
 WORKDIR /app
 COPY package.json ./

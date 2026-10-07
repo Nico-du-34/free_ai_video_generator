@@ -23,6 +23,12 @@ const DEFAULTS = {
   defaultProvider: 'agnes',
   maxRefs: 4,
   enhancePrompt: DEFAULT_ENHANCE,
+  audio: {
+    freesoundKey: '', jamendoClientId: '',
+    ttsProvider: 'pollinations', ttsModel: 'tts-1', ttsVoice: 'nova', localSpeed: 160,
+    googleUrl: 'https://translate.google.com/translate_tts',
+    freesoundUrl: 'https://freesound.org/apiv2', jamendoUrl: 'https://api.jamendo.com/v3.0',
+  },
   providers: {
     agnes: {
       label: 'Agnes AI', type: 'openai', baseUrl: 'https://apihub.agnes-ai.com/v1', apiKey: '',
@@ -68,6 +74,8 @@ const DEFAULTS = {
     },
   },
 };
+const AUDIO_ENV = { freesoundKey: 'FREESOUND_API_KEY', jamendoClientId: 'JAMENDO_CLIENT_ID' };
+const audioCfg = () => { const a = { ...settings.audio }; for (const [k, e] of Object.entries(AUDIO_ENV)) if (!a[k]) a[k] = process.env[e] || ''; return a; };
 const ENV_KEYS = { agnes: 'AGNES_API_KEY', pollinations: 'POLLINATIONS_API_KEY', together: 'TOGETHER_API_KEY', cloudflare: 'CLOUDFLARE_API_TOKEN', huggingface: 'HF_TOKEN', custom: 'CUSTOM_API_KEY' };
 
 let settings = load();
@@ -75,6 +83,7 @@ function load() {
   const saved = readJSON(path.join(DATA, 'settings.json'), {});
   const s = JSON.parse(JSON.stringify(DEFAULTS));
   for (const k of ['defaultProvider', 'maxRefs', 'enhancePrompt']) if (saved[k] !== undefined) s[k] = saved[k];
+  Object.assign(s.audio, saved.audio || {});
   for (const id of Object.keys(s.providers)) Object.assign(s.providers[id], (saved.providers || {})[id] || {});
   return s;
 }
@@ -87,6 +96,8 @@ function providerCfg(id) {
 }
 function publicSettings() {
   const out = JSON.parse(JSON.stringify(settings));
+  const ac = audioCfg();
+  for (const k of Object.keys(AUDIO_ENV)) { out.audio[k + 'Set'] = !!ac[k]; out.audio[k + 'Hint'] = ac[k] ? '…' + ac[k].slice(-4) : ''; delete out.audio[k]; }
   for (const id of Object.keys(out.providers)) {
     const k = providerCfg(id).apiKey;
     delete out.providers[id].apiKey;
@@ -100,6 +111,13 @@ function updateSettings(patch) {
   if (patch.defaultProvider && settings.providers[patch.defaultProvider]) settings.defaultProvider = patch.defaultProvider;
   if (patch.maxRefs !== undefined) settings.maxRefs = Math.min(10, Math.max(1, Math.round(+patch.maxRefs) || 4));
   if (typeof patch.enhancePrompt === 'string' && patch.enhancePrompt.trim()) settings.enhancePrompt = patch.enhancePrompt;
+  if (patch.audio) {
+    const a = patch.audio, t = settings.audio;
+    for (const k of ['ttsProvider', 'ttsModel', 'ttsVoice']) if (typeof a[k] === 'string') t[k] = a[k].trim();
+    for (const k of ['googleUrl', 'freesoundUrl', 'jamendoUrl']) if (typeof a[k] === 'string' && /^https?:\/\/\S+$/i.test(a[k].trim())) t[k] = a[k].trim().replace(/\/+$/, '');
+    for (const k of Object.keys(AUDIO_ENV)) { if (typeof a[k] === 'string' && a[k].trim()) t[k] = a[k].trim(); if (a['clear_' + k]) t[k] = ''; }
+    if (a.localSpeed !== undefined) t.localSpeed = Math.min(300, Math.max(80, Math.round(+a.localSpeed) || 160));
+  }
   for (const [id, pp] of Object.entries(patch.providers || {})) {
     const p = settings.providers[id];
     if (!p || !pp) continue;
@@ -132,4 +150,4 @@ function noteLatency(provider, ms) {
   try { writeJSON(statsFile, stats); } catch { /* non bloquant */ }
 }
 
-module.exports = { DATA, dirs, ID_RE, readJSON, writeJSON, getSettings, providerCfg, publicSettings, updateSettings, stats, noteLatency };
+module.exports = { audioCfg, DATA, dirs, ID_RE, readJSON, writeJSON, getSettings, providerCfg, publicSettings, updateSettings, stats, noteLatency };

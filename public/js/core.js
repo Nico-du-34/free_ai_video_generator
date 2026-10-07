@@ -22,10 +22,13 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem('afvg.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('afvg.' + k, JSON.stringify(v)); return true; } catch { toast('Stockage local plein ou indisponible', 'err'); return false; } },
 };
-const newScene = (n = 1) => ({ id: uid(), libId: null, name: 'Scène ' + n, prompt: '', promptOriginal: '', motion: '', endPrompt: '', duration: 3, refs: [] });
-const newDraft = () => ({ title: 'Ma vidéo', provider: '', fps: 12, size: '1024x576', mode: 'chain', concurrency: 2, keyEvery: 1, res: 'std', style: '', enrichAuto: true, simple: true, globalRefs: [], scenes: [newScene()] });
+const newScene = (n = 1) => ({ id: uid(), libId: null, name: 'Scène ' + n, prompt: '', promptOriginal: '', motion: '', endPrompt: '', duration: 3, refs: [], narration: '' });
+const newAudio = () => ({ voice: { engine: 'google', lang: 'fr', speed: 1, volume: 1 }, ambient: { kind: 'none', preset: 'rain', query: '', volume: 0.3 }, duck: true });
+const newDraft = () => ({ audio: newAudio(), title: 'Ma vidéo', provider: '', fps: 12, size: '1024x576', mode: 'chain', concurrency: 2, keyEvery: 1, res: 'std', style: '', enrichAuto: true, simple: true, globalRefs: [], scenes: [newScene()] });
 let draft = Object.assign(newDraft(), LS.get('draft', {}));
 if (!Array.isArray(draft.scenes) || !draft.scenes.length) draft.scenes = [newScene()];
+draft.scenes.forEach((s) => { if (typeof s.narration !== 'string') s.narration = ''; });
+draft.audio = { ...newAudio(), ...draft.audio, voice: { ...newAudio().voice, ...(draft.audio || {}).voice }, ambient: { ...newAudio().ambient, ...(draft.audio || {}).ambient } };
 let library = LS.get('library', []);
 let _t;
 const saveDraft = () => { clearTimeout(_t); _t = setTimeout(() => LS.set('draft', draft), 300); };

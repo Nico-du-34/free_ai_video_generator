@@ -14,6 +14,7 @@ docker compose up -d --build
 Sans Docker : Node ≥ 22 + ffmpeg, puis `npm start`.
 
 ## Fonctions
+- **Voix et ambiance** (carte *Son* du Studio, bouton *Audio* sur chaque instance) : narration par scène (écrite à la main ou par l'IA, calée sur la durée), voix gratuites (Google Traduction sans clé, voix locale espeak, Cloudflare MeloTTS, ou `/audio/speech` d'une API compatible OpenAI), ambiances générées par ffmpeg (pluie, vent, océan, feu, forêt, ville, espace, nappe musicale), ou recherche sur Freesound / Jamendo (clés gratuites). Mixage avec baisse automatique de l'ambiance quand la voix parle ; on peut changer l'audio après coup sans régénérer les images.
 - **Console par instance** (bouton Console) : journal en direct de chaque requête, essais, erreurs, assemblage.
 - **Séries** : bouton *Série* sur une instance → l'IA propose les prompts des épisodes suivants, tu les modifies, puis *Lancer N épisodes* crée une instance par épisode (références et dernière image de l'épisode 1 réutilisées pour garder la cohérence).
 - **Vitesse** : *Qualité* (chaînée), *Équilibré* (ancrée, 3 en parallèle, ~3× plus rapide), *Turbo* (+ 1 image IA sur 2 interpolée par ffmpeg, ~6×). Résolution *Brouillon* pour tester vite. Enrichissement de tous les prompts en **un seul appel**, quota ralenti automatiquement après un 429, image suivante préparée pendant l'appel en cours.

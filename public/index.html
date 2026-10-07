@@ -32,6 +32,7 @@
     <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
     <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
     <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/></symbol>
     <symbol id="i-clapper" viewBox="0 0 24 24"><path d="M4 11h16v10H4zM4 11l-1-5 17-3 1 5"/><path d="m8 7 2 3M13 6l2 3"/></symbol>
   </defs>
 </svg>
@@ -136,6 +137,13 @@
             </div>
           </div>
           <div id="scenes"></div>
+          </div>
+          <div class="card" id="soundCard">
+            <div class="card-title">Son <span class="opt">optionnel · voix off et ambiance, mixées dans la vidéo</span></div>
+            <div id="narrArea"><label class="big">Narration (voix off)
+              <textarea id="sNarr" rows="3" maxlength="1500" placeholder="Ce que la voix doit dire. Laisse vide pour une vidéo sans voix."></textarea></label></div>
+            <div class="actions tight"><button class="btn sm" data-act="narrate"><svg class="i"><use href="#i-sparkles"/></svg>Écrire la narration avec l'IA</button></div>
+            <div id="soundUi"></div>
           </div>
         </div>
 

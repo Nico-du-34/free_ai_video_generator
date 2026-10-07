@@ -30,6 +30,8 @@ function png(w, h, seed) {
   const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
+const { execFileSync } = require('child_process');
+const tone = (f, d) => execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', `sine=f=${f}:d=${d}`, '-f', 'mp3', 'pipe:1'], { maxBuffer: 1e7 });
 let n = 0;
 http.createServer((req, res) => {
   let body = '';
@@ -37,7 +39,13 @@ http.createServer((req, res) => {
   req.on('end', () => {
     const j = (() => { try { return JSON.parse(body); } catch { return {}; } })();
     res.setHeader('content-type', 'application/json');
-    if (!/Bearer .+/.test(req.headers.authorization || '')) { res.statusCode = 401; return res.end('{"error":{"message":"no key"}}'); }
+    if (!/translate_tts|\/files\/|\/search\/text\/|\/tracks\//.test(req.url) && !/Bearer .+/.test(req.headers.authorization || '')) { res.statusCode = 401; return res.end('{"error":{"message":"no key"}}'); }
+    if (/translate_tts/.test(req.url)) { console.log('tts google', decodeURIComponent(req.url).slice(0, 90)); res.setHeader('content-type', 'audio/mpeg'); return res.end(tone(300, 2)); }
+    if (/\/audio\/speech/.test(req.url)) { console.log('tts openai', body.slice(0, 80)); res.setHeader('content-type', 'audio/mpeg'); return res.end(tone(350, 3)); }
+    if (/melotts/.test(req.url)) { console.log('tts cloudflare', body.slice(0, 80)); return res.end(JSON.stringify({ result: { audio: tone(400, 2).toString('base64') } })); }
+    if (/\/search\/text\//.test(req.url)) { console.log('freesound search', req.url.slice(0, 80)); return res.end(JSON.stringify({ results: [{ id: 1, name: 'x', previews: { 'preview-hq-mp3': 'http://127.0.0.1:9099/files/amb.mp3' } }] })); }
+    if (/\/tracks\//.test(req.url)) { console.log('jamendo search', req.url.slice(0, 80)); return res.end(JSON.stringify({ results: [{ audio: 'http://127.0.0.1:9099/files/amb.mp3' }] })); }
+    if (/\/files\/amb\.mp3/.test(req.url)) { res.setHeader('content-type', 'audio/mpeg'); return res.end(tone(120, 5)); }
     const edits = req.url.endsWith('/images/edits');
     if (req.url.endsWith('/images/generations') || edits) {
       n++;

@@ -164,4 +164,13 @@ async function seriesIdeas(pid, info, count, signal) {
   return eps.slice(0, count).map((e, i) => ({ title: e.title || `Épisode ${i + 2}`, prompt: e.prompt }));
 }
 
-module.exports = { acquire, image, chat, enhanceMany, seriesIdeas };
+/** Écrit une narration (voix off) par scène, calée sur la durée de chaque scène. */
+async function narrate(pid, scenes, lang, signal) {
+  const L = { fr: 'French', en: 'English', es: 'Spanish', de: 'German', it: 'Italian', pt: 'Portuguese' }[lang] || 'French';
+  const sys = `You write the voice-over narration of a short video. For each scene, write natural spoken narration in ${L}, about 2.3 words per second of that scene's duration (never more), without stage directions or quotes. Return ONLY a JSON array of ${scenes.length} strings, in scene order.`;
+  const arr = parseJsonArray(await chat(pid, JSON.stringify(scenes.map((s) => ({ scene: s.prompt, seconds: s.duration }))), signal, sys));
+  if (!Array.isArray(arr) || arr.length !== scenes.length) throw new ApiError('Le modèle n\'a pas renvoyé une narration par scène, réessaie');
+  return arr.map((x) => String(x || '').trim().slice(0, 1500));
+}
+
+module.exports = { acquire, image, chat, enhanceMany, seriesIdeas, narrate, call, asJson };
