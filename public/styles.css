@@ -262,3 +262,10 @@ details details{margin-top:14px}
 .pick-card{text-align:left;background:var(--surface2);border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;font:inherit;color:var(--text)}
 .pick-card:hover{border-color:var(--acc)}.pick-card.on{border-color:var(--acc);background:var(--acc-soft)}
 .pick-card b{display:block;font-size:13px}.pick-card small{margin-top:2px}.pick-card .tag{display:inline-block;margin-top:4px;font-size:10px;font-weight:700;color:var(--acc);background:var(--acc-soft);border-radius:99px;padding:1px 8px}
+
+/* Buy Me a Coffee */
+.bmc{position:fixed;right:18px;bottom:18px;z-index:15;display:inline-flex;align-items:center;gap:8px;background:#FFDD00;color:#0d0c22;text-decoration:none;font-weight:700;font-size:13px;padding:9px 14px 9px 11px;border-radius:99px;box-shadow:0 4px 18px #0004;transition:transform .12s,box-shadow .12s}
+.bmc:hover{transform:translateY(-2px);box-shadow:0 8px 24px #0005}
+.bmc-ico{width:20px;height:20px}
+#toasts{bottom:74px}
+@media(max-width:760px){.bmc{bottom:76px;right:12px;padding:10px}.bmc span{display:none}}
