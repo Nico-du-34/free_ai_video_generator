@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frame Studio – vidéo IA image par image</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E🎞️%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <h1>🎞️ Frame Studio</h1>
+  <nav id="tabs">
+    <button data-tab="studio" class="active">Studio</button>
+    <button data-tab="jobs">Instances <span id="jobsBadge" class="badge" hidden>0</span></button>
+    <button data-tab="library">Bibliothèque</button>
+    <button data-tab="settings">Réglages</button>
+  </nav>
+  <span id="keyState" class="muted"></span>
+</header>
+
+<main>
+  <!-- STUDIO -->
+  <section id="tab-studio" class="tab active">
+    <div class="studio">
+      <div class="col-main">
+        <div class="card">
+          <h2>Vidéo</h2>
+          <div class="grid">
+            <label class="wide">Titre<input data-d="title" type="text"></label>
+            <label>Images / seconde<input data-d="fps" type="number" min="12" max="60" step="1"><small>minimum 12</small></label>
+            <label>Taille des images
+              <select data-d="size">
+                <option value="1024x576">1024×576 (16:9)</option>
+                <option value="576x1024">576×1024 (9:16)</option>
+                <option value="1024x1024">1024×1024 (1:1)</option>
+                <option value="1024x768">1024×768 (4:3)</option>
+                <option value="768x1024">768×1024 (3:4)</option>
+              </select>
+            </label>
+            <label>Continuité entre images
+              <select data-d="mode">
+                <option value="chain">Chaînée (image précédente en référence) – la plus fluide</option>
+                <option value="anchor">Ancrée (1ʳᵉ image de la scène) – parallélisable</option>
+                <option value="none">Aucune (indépendantes)</option>
+              </select>
+            </label>
+            <label>Images en parallèle (instance)<input data-d="concurrency" type="number" min="1" max="6"><small>ignoré en mode chaîné</small></label>
+            <label class="wide">Style global (ajouté à chaque prompt)<input data-d="style" type="text" placeholder="ex : cinematic, soft light, 35mm film"></label>
+            <label class="check wide"><input data-d="enrichAuto" type="checkbox"> Enrichir automatiquement les prompts au lancement (optionnel)</label>
+          </div>
+          <h3>Images de référence globales <small>(appliquées à toutes les scènes)</small></h3>
+          <div id="globalRefs"></div>
+        </div>
+
+        <div class="row-between">
+          <h2>Storyboard</h2>
+          <div class="actions">
+            <select id="libPick"><option value="">📚 Ajouter depuis la bibliothèque…</option></select>
+            <button class="btn" data-act="addScene">＋ Scène</button>
+          </div>
+        </div>
+        <div id="scenes"></div>
+      </div>
+
+      <aside class="col-side">
+        <div class="card sticky">
+          <h2>Estimation</h2>
+          <div id="estimate"></div>
+          <div class="actions col">
+            <button class="btn" data-act="preview">🔍 Aperçu (1 image test)</button>
+            <button class="btn primary" data-act="launch">🚀 Lancer la génération</button>
+            <small class="muted">Chaque lancement crée une nouvelle instance indépendante : tu peux en lancer plusieurs en parallèle.</small>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- INSTANCES -->
+  <section id="tab-jobs" class="tab">
+    <div class="row-between"><h2>Instances de génération</h2><span class="muted" id="jobsSummary"></span></div>
+    <div id="jobList" class="jobs"></div>
+    <p id="jobsEmpty" class="muted">Aucune instance. Lance une génération depuis le Studio.</p>
+  </section>
+
+  <!-- BIBLIOTHEQUE -->
+  <section id="tab-library" class="tab">
+    <div class="row-between"><h2>Bibliothèque de scènes</h2></div>
+    <div id="libList" class="libgrid"></div>
+    <p id="libEmpty" class="muted">Vide. Utilise « 💾 » sur une scène du Studio pour la sauvegarder.</p>
+  </section>
+
+  <!-- REGLAGES -->
+  <section id="tab-settings" class="tab">
+    <div class="card narrow">
+      <h2>Clé API Agnes (gratuite)</h2>
+      <p class="muted">Crée un compte gratuit sur <a href="https://platform.agnes-ai.com" target="_blank" rel="noopener">platform.agnes-ai.com</a>, génère une clé, colle-la ici. Elle est stockée uniquement dans le localStorage de ce navigateur.</p>
+      <div class="grid">
+        <label class="wide">Clé API<input data-s="apiKey" type="password" autocomplete="off" placeholder="sk-…"></label>
+        <label class="wide">URL de base de l'API<input data-s="baseUrl" type="text"></label>
+        <label class="check wide"><input data-s="useProxy" type="checkbox"> Passer par le proxy local (<code>npm start</code>) – recommandé, évite les erreurs CORS</label>
+        <label>Modèle image<input data-s="imageModel" type="text"></label>
+        <label>Modèle texte (enrichissement)<input data-s="chatModel" type="text"></label>
+        <label>Quota : images / minute<input data-s="rpm" type="number" min="1" max="120"><small>gratuit 1K : 20/min – partagé entre toutes les instances</small></label>
+        <label>Images de référence max / requête<input data-s="maxRefs" type="number" min="1" max="10"></label>
+        <label>Champ JSON des références<input data-s="refField" type="text"></label>
+        <label class="check"><input data-s="refArray" type="checkbox"> Envoyer sous forme de tableau</label>
+        <label>Format vidéo
+          <select data-s="videoFormat"><option value="webm">WebM (le plus fiable)</option><option value="mp4">MP4 (si le navigateur le permet)</option></select>
+        </label>
+        <label class="wide">Consigne d'enrichissement des prompts<textarea data-s="enhancePrompt" rows="4"></textarea></label>
+      </div>
+      <div class="actions">
+        <button class="btn" data-act="testKey">Tester la clé</button>
+        <button class="btn danger" data-act="wipe">Tout effacer (données locales)</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="modal" hidden><div class="modal-box"><button class="x" data-act="closeModal">✕</button><div id="modalBody"></div></div></div>
+<div id="toasts"></div>
+
+<script src="js/storage.js"></script>
+<script src="js/api.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
