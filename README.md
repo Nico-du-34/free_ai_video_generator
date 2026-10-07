@@ -1,6 +1,6 @@
 # 🎞️ Frame Studio – vidéos IA image par image
 
-Génère chaque image d'une vidéo avec une IA gratuite (**Agnes AI** ou **Pollinations AI**), puis assemble le tout en **MP4** (ffmpeg). Les générations tournent **sur le serveur** : tu peux fermer l'onglet, éteindre ton PC, et revenir récupérer la vidéo.
+Génère chaque image d'une vidéo avec une IA gratuite (**Agnes AI**, **Pollinations AI**, **Together AI**, **Cloudflare Workers AI**, **Hugging Face** ou n'importe quelle API compatible OpenAI), puis assemble le tout en **MP4** (ffmpeg). Les générations tournent **sur le serveur** : tu peux fermer l'onglet, éteindre ton PC, et revenir récupérer la vidéo.
 
 ## Démarrage (Docker)
 ```bash
@@ -14,7 +14,10 @@ docker compose up -d --build
 Sans Docker : Node ≥ 22 + ffmpeg, puis `npm start`.
 
 ## Fonctions
-- Fournisseurs : Agnes AI et Pollinations AI (API compatibles OpenAI, modèles et quotas réglables).
+- **Console par instance** (bouton Console) : journal en direct de chaque requête, essais, erreurs, assemblage.
+- **Séries** : bouton *Série* sur une instance → l'IA propose les prompts des épisodes suivants, tu les modifies, puis *Lancer N épisodes* crée une instance par épisode (références et dernière image de l'épisode 1 réutilisées pour garder la cohérence).
+- **Vitesse** : *Qualité* (chaînée), *Équilibré* (ancrée, 3 en parallèle, ~3× plus rapide), *Turbo* (+ 1 image IA sur 2 interpolée par ffmpeg, ~6×). Résolution *Brouillon* pour tester vite. Enrichissement de tous les prompts en **un seul appel**, quota ralenti automatiquement après un 429, image suivante préparée pendant l'appel en cours.
+- Fournisseurs préremplis (gratuits) : Agnes, Pollinations, Together (FLUX schnell), Cloudflare Workers AI, Hugging Face + un slot personnalisé. Seuls Agnes et Pollinations gèrent les images de référence ; les autres produisent des images indépendantes (texte → image).
 - Images de référence globales / par scène + continuité (image précédente) : modes *chaînée*, *ancrée*, *indépendante*.
 - Enrichissement de prompt optionnel (bouton ✨ ou automatique au lancement).
 - Storyboard multi-scènes + bibliothèque de scènes.

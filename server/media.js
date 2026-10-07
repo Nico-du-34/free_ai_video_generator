@@ -36,10 +36,15 @@ async function toJpeg(buf, max) {
   return out;
 }
 
-async function encodeVideo(seqPattern, fps, outFile, total, onProgress) {
+async function encodeVideo(seqPattern, o, outFile, total, onProgress) {
+  const filters = [];
+  if (o.interp === 'mci') filters.push(`minterpolate=fps=${o.outFps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1`);
+  else if (o.interp === 'blend') filters.push(`minterpolate=fps=${o.outFps}:mi_mode=blend`);
+  if (o.interp) filters.push(`tpad=stop_mode=clone:stop=${total}`);   // l'interpolation raccourcit la fin : on complète puis on coupe
+  filters.push('scale=trunc(iw/2)*2:trunc(ih/2)*2', 'format=yuv420p');
   await ffmpeg([
-    '-y', '-framerate', String(fps), '-i', seqPattern,
-    '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p',
+    '-y', '-framerate', String(o.inFps), '-i', seqPattern,
+    '-vf', filters.join(','), ...(o.interp ? ['-frames:v', String(total)] : []),
     '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-movflags', '+faststart',
     '-progress', 'pipe:1', outFile,
   ], { onLine: (l) => { const m = /^frame=(\d+)/.exec(l); if (m && onProgress) onProgress(Math.min(1, +m[1] / total)); } });

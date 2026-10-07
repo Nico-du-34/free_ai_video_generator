@@ -61,6 +61,12 @@ const sceneFrames = (s) => Math.max(1, Math.round((+s.duration || 0) * draft.fps
 
 const IDEAS = ['Un astronaute marche sur la lune', 'Un dragon survole un village médiéval au lever du soleil', 'Une voiture de sport roule dans une ville néon sous la pluie', 'Un chat joue avec une pelote de laine, style dessin animé', 'Des vagues sur une plage tropicale au coucher du soleil', 'Une fleur qui s\'ouvre en accéléré'];
 const DURS = [3, 5, 10, 20, 30, 60];
+const SPEEDS = [
+  ['quality', 'Qualité', { mode: 'chain', concurrency: 1, keyEvery: 1 }, 'Chaque image part de la précédente : le plus cohérent, mais le plus lent.'],
+  ['balanced', 'Équilibré', { mode: 'anchor', concurrency: 3, keyEvery: 1 }, '3 images en parallèle à partir de la 1ʳᵉ de la scène : environ 3× plus rapide.'],
+  ['turbo', 'Turbo', { mode: 'anchor', concurrency: 4, keyEvery: 2 }, 'Parallèle + 1 image IA sur 2, les autres sont interpolées : environ 6× plus rapide.'],
+];
+const speedOf = () => { const m = SPEEDS.find(([, , c]) => c.mode === draft.mode && c.keyEvery === +draft.keyEvery && (c.mode === 'chain' || c.concurrency === +draft.concurrency)); return m ? m[0] : ''; };
 const SIZES = [['1024x576', '16:9', 'Paysage', [30, 17]], ['576x1024', '9:16', 'Vertical', [17, 30]], ['1024x1024', '1:1', 'Carré', [22, 22]]];
 const totalDur = () => draft.scenes.reduce((a, s) => a + (+s.duration || 0), 0);
 function setTotal(sec) {
@@ -89,6 +95,10 @@ function renderSimple() {
   $('#ideas').innerHTML = multi ? '' : IDEAS.map((t) => `<button data-idea="${esc(t)}">${esc(t)}</button>`).join('');
   $('#durChips').innerHTML = DURS.map((v) => chip('dur', v, v < 60 ? v + ' s' : '1 min', false)).join('');
   $('#sizeChips').innerHTML = SIZES.map(([v, r, l, [w, h]]) => chip('size', v, `<i style="width:${w}px;height:${h}px"></i>${l} <small>${r}</small>`, draft.size === v)).join('');
+  const noRefs = (providers()[draft.provider] || {}).refMode === 'none';
+  $('#speedChips').innerHTML = SPEEDS.map(([id, l, c]) => chip('speed', id, l, speedOf() === id)).join('');
+  $('#speedHint').textContent = noRefs ? 'Cette IA ne gère pas les images de référence : les images sont indépendantes et générées en parallèle.' : (SPEEDS.find(([id]) => id === speedOf()) || [0, 0, 0, 'Réglage personnalisé (mode Avancé).'])[3];
+  $('#resChips').innerHTML = [['std', 'Standard'], ['draft', 'Brouillon · plus rapide']].map(([v, l]) => chip('res', v, l, draft.res === v)).join('');
   $('#fpsChips').innerHTML = [[12, 'Standard · 12 img/s'], [18, 'Fluide · 18 img/s'], [24, 'Cinéma · 24 img/s']].map(([v, l]) => chip('fps', v, l, draft.fps === v)).join('');
   $('#provChips').innerHTML = Object.entries(providers()).map(([id, p]) => chip('prov', id, esc(p.label) + (p.hasKey ? '' : ' <small>clé à ajouter</small>'), draft.provider === id)).join('');
   $('#sRefs').innerHTML = refsHtml(draft.globalRefs, 'global');
@@ -152,24 +162,34 @@ function renderProviderHint() {
   h.innerHTML = p && !p.hasKey ? `<a href="#settings" data-go="settings" class="warn-link">Ajouter la clé ${esc(p.label)}</a>` : '';
 }
 
+const genCount = (n, ke) => Math.floor((n - 1) / ke) + 1 + ((n - 1) % ke !== 0 ? 1 : 0);
+const effSize = () => {
+  if (draft.res !== 'draft') return draft.size;
+  const [w, h] = draft.size.split('x').map(Number);
+  return `${Math.round(w * 0.625 / 8) * 8}x${Math.round(h * 0.625 / 8) * 8}`;
+};
 function estimate() {
   const frames = draft.scenes.reduce((a, s) => a + sceneFrames(s), 0);
+  const ke = clamp(+draft.keyEvery || 1, 1, 6);
+  const gen = draft.scenes.reduce((a, s) => a + genCount(sceneFrames(s), ke), 0);
   const videoSec = frames / draft.fps;
   const p = providers()[draft.provider] || { rpm: 10 };
   const lat = ((server.latency || {})[draft.provider] || 8000) / 1000;
-  const conc = draft.mode === 'chain' ? 1 : clamp(draft.concurrency, 1, 6);
+  const noRefs = p.refMode === 'none';
+  const conc = noRefs ? Math.max(3, draft.concurrency) : draft.mode === 'chain' ? 1 : clamp(draft.concurrency, 1, 6);
   const running = server.jobs.filter((j) => j.status === 'running' && j.provider === draft.provider).length;
   const quotaSpf = 60 / (p.rpm / (running + 1));
   const latSpf = lat / conc;
   const spf = Math.max(quotaSpf, latSpf);
-  return { frames, videoSec, spf, lat, running, rpm: p.rpm, measured: !!(server.latency || {})[draft.provider], gen: frames * spf, total: frames * spf + 5 + frames / 120, calls: frames + (draft.enrichAuto ? draft.scenes.length : 0), quotaBound: quotaSpf >= latSpf };
+  return { frames, genFrames: gen, ke, videoSec, spf, lat, running, rpm: p.rpm, measured: !!(server.latency || {})[draft.provider], gen: gen * spf, total: gen * spf + (ke > 1 ? frames * 0.05 : 0) + 5 + frames / 120, calls: gen + (draft.enrichAuto ? 1 : 0), quotaBound: quotaSpf >= latSpf };
 }
 function renderEstimate() {
   const e = estimate();
   $('#estimate').innerHTML = `
     <div class="total"><span>Temps total estimé</span><strong>~${fmtDur(e.total)}</strong></div>
     <dl class="est">
-      <dt>Images à générer</dt><dd>${e.frames}</dd>
+      <dt>Images de la vidéo</dt><dd>${e.frames}</dd>
+      <dt>Images générées par l'IA</dt><dd>${e.genFrames}${e.ke > 1 ? ` <small style="display:inline">(1 sur ${e.ke})</small>` : ''}</dd>
       <dt>Durée de la vidéo</dt><dd>${e.videoSec.toFixed(1)} s</dd>
       <dt>Appels API</dt><dd>${e.calls}</dd>
       <dt>Temps par image</dt><dd>~${e.spf.toFixed(1)} s</dd>
@@ -189,7 +209,7 @@ document.addEventListener('input', (e) => {
   if (el.id === 'sPrompt') { draft.scenes[0].prompt = el.value; saveDraft(); return; }
   if (el.dataset.d) {
     const k = el.dataset.d;
-    draft[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value;
+    draft[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' || el.dataset.num ? +el.value : el.value;
     if (k === 'mode') { $('[data-d=concurrency]').disabled = draft.mode === 'chain'; $('#modeHint').textContent = MODE_HINT[draft.mode]; }
     if (k === 'provider') renderProviderHint();
     saveDraft(); if (k !== 'title') renderEstimate();
@@ -229,7 +249,7 @@ async function previewFrame(btn) {
   const s = draft.scenes[0];
   if (!s.prompt.trim()) return toast('Écris un prompt dans la 1ʳᵉ scène', 'err');
   try {
-    const r = await withBusy(btn, 'Génération…', () => api('POST', '/api/preview', { provider: draft.provider, size: draft.size, style: draft.style, fps: draft.fps, scene: s, globalRefs: draft.globalRefs }));
+    const r = await withBusy(btn, 'Génération…', () => api('POST', '/api/preview', { provider: draft.provider, size: effSize(), style: draft.style, fps: draft.fps, scene: s, globalRefs: draft.globalRefs }));
     openModal(`<h2>Aperçu · première image</h2><img class="preview-img" src="${r.image}" alt="Aperçu"><p class="fine">Généré en ${(r.ms / 1000).toFixed(1)} s.<br>Prompt envoyé : <code>${esc(r.prompt)}</code></p>`);
     poll(true);
   } catch (e) { toast('Aperçu : ' + e.message, 'err'); }
@@ -240,7 +260,7 @@ async function launch(btn) {
   const p = providers()[draft.provider];
   if (p && !p.hasKey) { toast(`Ajoute d'abord la clé ${p.label}`, 'err'); return showTab('settings'); }
   try {
-    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, title: (!draft.title || draft.title === 'Ma vidéo') ? draft.scenes[0].prompt.trim().slice(0, 50) : draft.title, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs }) => ({ name, prompt, motion, endPrompt, duration, refs })) }));
+    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, size: effSize(), title: (!draft.title || draft.title === 'Ma vidéo') ? draft.scenes[0].prompt.trim().slice(0, 50) : draft.title, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs }) => ({ name, prompt, motion, endPrompt, duration, refs })) }));
     server.jobs.unshift(job);
     toast(`« ${job.title} » lancée : ${job.done.length} images. Tu peux quitter la page.`, 'ok');
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -255,6 +275,7 @@ function jobCardHtml(j) {
     <div class="jinfo">
       <div class="jtop"><h3 data-r="title"></h3><span class="pill" data-r="status"></span></div>
       <div class="meta" data-r="meta"></div>
+      <span class="series-chip" data-r="series" hidden></span>
       <div class="bar"><i data-r="bar"></i></div>
       <div class="prog" data-r="prog"></div>
       <div class="note" data-r="note"></div>
@@ -263,6 +284,8 @@ function jobCardHtml(j) {
         <button class="btn sm" data-act="jobAssemble" data-r="asm">${ico('clapper')}Assembler</button>
         <a class="btn sm primary" data-r="dl" download>${ico('download')}Vidéo</a>
         <button class="btn sm" data-act="jobFrames">${ico('image')}Images</button>
+        <button class="btn sm" data-act="jobConsole">${ico('terminal')}Console</button>
+        <button class="btn sm" data-act="jobSeries">${ico('layers')}Série</button>
         <button class="icon-btn" data-act="jobClone" title="Relancer une copie">${ico('copy')}</button>
         <button class="icon-btn danger" data-act="jobDel" title="Supprimer">${ico('trash')}</button>
       </div>
@@ -274,11 +297,12 @@ function updateJobCard(j) {
   const c = jobCard(j.id);
   if (!c) return;
   const r = (k) => $(`[data-r=${k}]`, c);
-  const n = (j.done.match(/1/g) || []).length, total = j.done.length, remaining = total - n;
+  const n = (j.done.match(/1/g) || []).length, total = (j.done.match(/[01]/g) || []).length, vframes = j.done.length, remaining = total - n;
   const label = (providers()[j.provider] || {}).label || j.provider;
   r('title').textContent = j.title;
   const st = r('status'); st.textContent = STATUS[j.status] || j.status; st.className = 'pill ' + j.status;
-  r('meta').textContent = `${label} · ${j.fps} fps · ${j.size} · ${j.scenes.length} scène(s) · ${MODE_LABEL[j.mode]} · ${(total / j.fps).toFixed(1)} s`;
+  r('meta').textContent = `${label} · ${j.fps} fps · ${j.size} · ${j.scenes.length} scène(s) · ${MODE_LABEL[j.mode]}${j.keyEvery > 1 ? ` · 1 image IA sur ${j.keyEvery}` : ''} · ${(vframes / j.fps).toFixed(1)} s`;
+  const sc = r('series'); sc.hidden = !j.series; if (j.series) sc.textContent = `Série « ${j.series.title} » · épisode ${j.series.ep}/${j.series.of}`;
   const pct = j.status === 'assembling' ? (j.assemble || 0) * 100 : (n / total) * 100;
   r('bar').style.width = pct + '%';
   c.classList.toggle('live', j.status === 'running' || j.status === 'assembling');
@@ -321,13 +345,77 @@ function renderJobs() {
 async function openGallery(j) {
   openModal(`<h2>${esc(j.title)} · images</h2><p class="fine">Clique sur une image pour la télécharger.</p><div class="gal">${[...j.done].map((d, i) => d === '1'
     ? `<a href="/api/jobs/${j.id}/frame/${i}?dl=1" download><img src="/api/jobs/${j.id}/frame/${i}" loading="lazy" alt=""><span>${i + 1}</span></a>`
-    : `<a class="missing"><span>${i + 1}</span>…</a>`).join('')}</div>`);
+    : `<a class="missing" title="${d === '-' ? 'image interpolée' : 'pas encore générée'}"><span>${i + 1}</span>${d === '-' ? '≈' : '…'}</a>`).join('')}</div>`);
 }
 async function jobAction(j, action) {
   try { Object.assign(j, await api('POST', `/api/jobs/${j.id}/${action}`)); updateJobCard(j); renderBadge(); } catch (e) { toast(e.message, 'err'); }
   poll(true);
 }
 const notified = new Set();
+
+
+/* ---------- Console d'une instance ---------- */
+function openConsole(j) {
+  let since = 0, alive = true;
+  const lines = [];
+  openModal(`<h2>Console · ${esc(j.title)}</h2><div class="console" id="con" aria-live="polite"></div>
+    <div class="actions tight"><label class="check"><input id="conAuto" type="checkbox" checked><span>Défilement automatique</span></label><button class="btn sm" data-act="conCopy">Copier</button><small style="margin:0 0 0 auto">Mise à jour en direct · dernières 400 lignes</small></div>`, () => { alive = false; });
+  const box = $('#con');
+  const fmt = (x) => { const d = new Date(x.t); return `[${d.toLocaleTimeString('fr-FR')}] ${x.m}`; };
+  window.__copyConsole = () => navigator.clipboard.writeText(lines.join('\n')).then(() => toast('Console copiée', 'ok'));
+  (async function tick() {
+    while (alive) {
+      try {
+        const r = await api('GET', `/api/jobs/${j.id}/log?since=${since}`);
+        if (!alive) return;
+        if (r.lines.length) {
+          for (const x of r.lines) {
+            lines.push(fmt(x));
+            const el = document.createElement('span');
+            el.className = 'ln ' + x.l; el.textContent = fmt(x);
+            box.appendChild(el);
+          }
+          since = r.last;
+          if ($('#conAuto') && $('#conAuto').checked) box.scrollTop = box.scrollHeight;
+        } else if (!since && !box.children.length) box.innerHTML = '<span class="ln dbg">Aucun événement pour l\'instant…</span>';
+      } catch { /* serveur indisponible : on réessaie */ }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  })();
+}
+
+/* ---------- Série : idées de prochains épisodes ---------- */
+let ser = null;
+function serRender() {
+  const n = ser.ideas.filter((e) => e.prompt.trim()).length;
+  $('#serList').innerHTML = ser.busy ? '<p class="fine">✨ Écriture des épisodes en cours…</p>'
+    : ser.ideas.map((e, i) => `<div class="ep" data-i="${i}"><span class="num">${i + 2}</span><div><input type="text" data-ep="title" value="${esc(e.title)}" placeholder="Titre de l'épisode"><textarea data-ep="prompt" rows="3" placeholder="Prompt de l'épisode">${esc(e.prompt)}</textarea></div><button class="icon-btn danger" data-act="serDel" title="Retirer">${ico('trash')}</button></div>`).join('') || '<p class="fine">Aucune idée pour l\'instant.</p>';
+  $('#serGo').textContent = `Lancer ${n} épisode${n > 1 ? 's' : ''}`;
+  $('#serGo').disabled = !n || ser.busy;
+  $('#serGen').disabled = ser.busy;
+}
+async function serGenerate() {
+  ser.busy = true; serRender();
+  try { ser.ideas = (await api('POST', `/api/jobs/${ser.job.id}/series`, { ideas: true, count: +$('#serCount').value })).ideas; }
+  catch (e) { toast('Idées de série : ' + e.message, 'err'); }
+  ser.busy = false; if (ser && !$('#modal').hidden) serRender();
+}
+function openSeries(j) {
+  ser = { job: j, ideas: [], busy: false };
+  openModal(`<h2>Convertir en série</h2>
+    <p class="fine" style="margin-top:0">« ${esc(j.title)} » devient l'épisode 1. L'IA propose la suite : modifie, retire ou ajoute des épisodes, puis lance-les tous en une fois (chacun devient une instance).</p>
+    <div class="actions"><label style="display:flex;gap:8px;align-items:center">Épisodes à proposer
+      <select id="serCount" class="compact" style="margin:0"><option>3</option><option selected>5</option><option>8</option><option>12</option></select></label>
+      <button class="btn" id="serGen" data-act="serGen">${ico('sparkles')}Proposer d'autres idées</button></div>
+    <div id="serList"></div>
+    <label class="check" style="margin-top:12px"><input id="serKeep" type="checkbox" checked><span>Garder la cohérence : réutiliser les références et la dernière image de l'épisode 1</span></label>
+    <div class="actions sticky-foot"><button class="btn sm" data-act="serAdd">${ico('plus')}Épisode manuel</button><button class="btn primary" id="serGo" data-act="serLaunch" style="margin-left:auto"></button></div>`, () => { ser = null; });
+  serGenerate();
+}
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (el.dataset.ep && ser) { ser.ideas[+el.closest('.ep').dataset.i][el.dataset.ep] = el.value; const n = ser.ideas.filter((x) => x.prompt.trim()).length; $('#serGo').textContent = `Lancer ${n} épisode${n > 1 ? 's' : ''}`; $('#serGo').disabled = !n; }
+});
 
 /* ---------- Bibliothèque ---------- */
 function renderLibrary() {
@@ -348,35 +436,39 @@ function field(pid, k, label, v, type = 'text', extra = '') {
 function renderSettings() {
   const s = server.settings;
   if (!s) return;
+  const open = new Set($$('#settingsBody details.prov[open]').map((d) => d.dataset.pid));
+  const sel = (id, k, v, opts) => `<select data-p="${id}" data-k="${k}">${opts.map(([val, l]) => `<option value="${val}" ${v === val ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   $('#settingsBody').innerHTML = Object.entries(s.providers).map(([id, p]) => `
-    <div class="card prov" data-pid="${id}">
-      <div class="prov-head">
-        <div><div class="card-title" style="margin:0">${esc(p.label)}</div>
-          <span class="pill ${p.hasKey ? 'done' : 'paused'}">${p.hasKey ? 'Clé configurée ' + esc(p.keyHint) + (p.keyFromEnv ? ' (variable d\'environnement)' : '') : 'Clé manquante'}</span></div>
-        <a href="${esc(p.keyUrl)}" target="_blank" rel="noopener" class="btn sm">Obtenir une clé gratuite</a>
-      </div>
+    <details class="card prov" data-pid="${id}" ${(open.size ? open.has(id) : p.hasKey || id === s.defaultProvider) ? 'open' : ''}>
+      <summary><span class="sum-l"><span class="card-title" style="margin:0">${esc(p.label)}</span>
+        <span class="pill ${p.hasKey ? 'done' : 'paused'}">${p.hasKey ? 'Clé configurée ' + esc(p.keyHint) + (p.keyFromEnv ? ' (env)' : '') : 'Clé manquante'}</span>
+        ${p.refMode === 'none' ? '<span class="pill">sans références</span>' : ''}</span></summary>
+      <p class="fine" style="margin:0 0 14px">${esc(p.help || '')}</p>
       <div class="grid">
-        <label class="wide">Clé API<input data-p="${id}" data-k="apiKey" type="password" autocomplete="off" placeholder="${p.hasKey ? 'Laisser vide pour conserver la clé actuelle' : 'Colle ta clé ici'}"></label>
+        ${p.custom ? field(id, 'label', 'Nom', p.label) : ''}
+        <label class="wide">Clé API / token<input data-p="${id}" data-k="apiKey" type="password" autocomplete="off" placeholder="${p.hasKey ? 'Laisser vide pour conserver la clé actuelle' : 'Colle ta clé ici'}"></label>
         ${field(id, 'imageModel', 'Modèle image', p.imageModel, 'text', 'placeholder="(modèle par défaut)"')}
-        ${field(id, 'editModel', 'Modèle avec références', p.editModel, 'text', 'placeholder="(même modèle)"')}
-        ${field(id, 'chatModel', 'Modèle texte (enrichissement)', p.chatModel)}
+        ${p.type === 'openai' ? field(id, 'editModel', 'Modèle avec références', p.editModel, 'text', 'placeholder="(même modèle)"') : ''}
+        ${p.type === 'openai' ? field(id, 'chatModel', 'Modèle texte (enrichissement, séries)', p.chatModel, 'text', 'placeholder="(aucun)"') : ''}
         ${field(id, 'rpm', 'Quota : images / minute', p.rpm, 'number', 'min="1" max="600"')}
       </div>
       <details><summary>Avancé</summary>
         <div class="grid">
           ${field(id, 'baseUrl', 'URL de base de l\'API', p.baseUrl)}
-          <label>Envoi des références
-            <select data-p="${id}" data-k="refMode"><option value="field" ${p.refMode === 'field' ? 'selected' : ''}>Dans la requête JSON (champ)</option><option value="edits" ${p.refMode === 'edits' ? 'selected' : ''}>Endpoint /images/edits (multipart)</option></select></label>
+          ${p.type === 'openai' ? `<label>Envoi des références${sel(id, 'refMode', p.refMode, [['field', 'Dans la requête JSON (champ)'], ['edits', 'Endpoint /images/edits (multipart)'], ['none', 'Non supporté (texte → image)']])}</label>
           ${field(id, 'refField', 'Champ JSON des références', p.refField)}
-          <label class="check"><input data-p="${id}" data-k="refArray" type="checkbox" ${p.refArray ? 'checked' : ''}><span>Envoyer sous forme de tableau</span></label>
+          <label class="check"><input data-p="${id}" data-k="refArray" type="checkbox" ${p.refArray ? 'checked' : ''}><span>Références sous forme de tableau</span></label>
+          <label>Taille envoyée${sel(id, 'sizeMode', p.sizeMode, [['size', 'size: "1024x576"'], ['wh', 'width + height']])}</label>` : ''}
+          ${field(id, 'extraBody', 'Paramètres supplémentaires (JSON)', p.extraBody, 'text', 'placeholder=\'{"steps":4}\'')}
         </div>
       </details>
       <div class="actions">
         <button class="btn primary" data-act="saveProv">Enregistrer</button>
         <button class="btn" data-act="testProv">Tester la connexion</button>
+        <a href="${esc(p.keyUrl)}" target="_blank" rel="noopener" class="btn">Obtenir une clé gratuite</a>
         ${p.hasKey && !p.keyFromEnv ? '<button class="btn ghost danger" data-act="clearKey">Supprimer la clé</button>' : ''}
       </div>
-    </div>`).join('') + `
+    </details>`).join('') + `
     <div class="card">
       <div class="card-title">Général</div>
       <div class="grid">
@@ -398,8 +490,9 @@ async function saveSettings(patch, msg = 'Réglages enregistrés') {
 }
 
 /* ---------- Modal ---------- */
-function openModal(html) { $('#modalBody').innerHTML = html; $('#modal').hidden = false; }
-function closeModal() { $('#modal').hidden = true; $('#modalBody').innerHTML = ''; }
+let modalCleanup = null;
+function openModal(html, cleanup) { closeModal(); $('#modalBody').innerHTML = html; $('#modal').hidden = false; modalCleanup = cleanup || null; }
+function closeModal() { if (modalCleanup) { modalCleanup(); modalCleanup = null; } $('#modal').hidden = true; $('#modalBody').innerHTML = ''; }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
@@ -419,6 +512,8 @@ document.addEventListener('click', async (e) => {
     if (ch.dataset.chip === 'dur') return setTotal(+v);
     if (ch.dataset.chip === 'size') draft.size = v;
     if (ch.dataset.chip === 'fps') draft.fps = +v;
+    if (ch.dataset.chip === 'res') draft.res = v;
+    if (ch.dataset.chip === 'speed') Object.assign(draft, SPEEDS.find(([id]) => id === v)[2]);
     if (ch.dataset.chip === 'prov') draft.provider = v;
     saveDraft(); return renderStudio();
   }
@@ -458,6 +553,19 @@ document.addEventListener('click', async (e) => {
       case 'jobToggle': jobAction(job, job.status === 'running' ? 'pause' : 'resume'); break;
       case 'jobAssemble': jobAction(job, 'assemble'); break;
       case 'jobFrames': openGallery(job); break;
+      case 'jobConsole': openConsole(job); break;
+      case 'jobSeries': openSeries(job); break;
+      case 'conCopy': window.__copyConsole(); break;
+      case 'serGen': serGenerate(); break;
+      case 'serAdd': ser.ideas.push({ title: '', prompt: '' }); serRender(); break;
+      case 'serDel': ser.ideas.splice(+b.closest('.ep').dataset.i, 1); serRender(); break;
+      case 'serLaunch': {
+        const eps = ser.ideas.filter((x) => x.prompt.trim());
+        const r = await withBusy(b, 'Lancement…', () => api('POST', `/api/jobs/${ser.job.id}/series`, { episodes: eps, keepContinuity: $('#serKeep').checked }));
+        r.jobs.reverse().forEach((x) => server.jobs.unshift(x));
+        closeModal(); poll(true);
+        toast(`${r.jobs.length} épisodes lancés`, 'ok'); showTab('jobs'); break;
+      }
       case 'jobClone': { const c = await api('POST', `/api/jobs/${job.id}/clone`); server.jobs.unshift(c); renderJobs(); toast('Copie lancée', 'ok'); break; }
       case 'jobDel':
         if (!confirm(`Supprimer « ${job.title} », ses images et sa vidéo ?`)) return;

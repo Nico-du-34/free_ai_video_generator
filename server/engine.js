@@ -11,12 +11,15 @@ const { clamp, uid, retry } = require('./util');
 const jobs = new Map();
 const runners = new Map();
 const MODES = ['chain', 'anchor', 'none'];
+const INTERP = process.env.INTERPOLATION === 'blend' ? 'blend' : 'mci';
+// done[i] : '1' générée · '0' à générer · '-' non générée (interpolée à l'assemblage)
 
 const jobDir = (id) => path.join(store.dirs.jobs, id);
 const framesDir = (id) => path.join(jobDir(id), 'frames');
 const framePath = (id, i) => path.join(framesDir(id), String(i + 1).padStart(5, '0') + '.png');
 const videoPath = (id) => path.join(jobDir(id), 'video.mp4');
 const assetPath = (id) => path.join(store.dirs.assets, id + '.jpg');
+const httpError = (status, msg) => Object.assign(new Error(msg), { status });
 
 /* ---------- Persistance ---------- */
 const timers = new Map();
@@ -27,7 +30,16 @@ function persist(job, now) {
 }
 function flushAll() { for (const j of jobs.values()) persist(j, true); }
 
-/* ---------- Prompt d'une image ---------- */
+/* ---------- Console de l'instance ---------- */
+function log(job, lvl, msg) {
+  job.logSeq = (job.logSeq || 0) + 1;
+  (job.log = job.log || []).push({ n: job.logSeq, t: Date.now(), l: lvl, m: String(msg).slice(0, 600) });
+  if (job.log.length > 400) job.log.splice(0, job.log.length - 400);
+}
+const logLines = (job, since) => ({ lines: (job.log || []).filter((x) => x.n > since), last: job.logSeq || 0 });
+const slim = (job) => ({ ...job, log: undefined, logN: job.logSeq || 0 });
+
+/* ---------- Prompt et plan ---------- */
 function framePrompt(job, scene, k, n) {
   const p = n > 1 ? Math.round((k / (n - 1)) * 100) : 0;
   let t = [job.style, scene.prompt].filter(Boolean).join(', ');
@@ -38,9 +50,11 @@ function framePrompt(job, scene, k, n) {
   return t + ` (frame ${k + 1} of ${n})`;
 }
 const plan = (job) => job.scenes.flatMap((s, si) => { const n = Math.max(1, Math.round(s.duration * job.fps)); return Array.from({ length: n }, (_, k) => ({ si, k, n })); });
+const isKey = (f, ke) => f.k % ke === 0 || f.k === f.n - 1;
+const countGen = (job) => (job.done.match(/[01]/g) || []).length;
+const countDone = (job) => (job.done.match(/1/g) || []).length;
 
 /* ---------- Création ---------- */
-function httpError(status, msg) { return Object.assign(new Error(msg), { status }); }
 function validRefs(list) {
   if (!Array.isArray(list)) return [];
   return list.filter((id) => typeof id === 'string' && store.ID_RE.test(id) && fs.existsSync(assetPath(id))).slice(0, 10);
@@ -53,29 +67,69 @@ function createJob(spec) {
   if (!Array.isArray(spec.scenes) || !spec.scenes.length) throw httpError(400, 'Au moins une scène est requise');
   if (spec.scenes.length > 50) throw httpError(400, '50 scènes maximum');
   const str = (v, n) => String(v == null ? '' : v).slice(0, n);
+  const noRefs = settings.providers[provider].refMode === 'none';
   const job = {
     id: 'j_' + uid(), title: str(spec.title, 120).trim() || 'Vidéo', provider, createdAt: Date.now(), status: 'paused',
-    fps: clamp(Math.round(+spec.fps) || 12, 12, 60), size, mode: MODES.includes(spec.mode) ? spec.mode : 'chain',
-    concurrency: clamp(Math.round(+spec.concurrency) || 1, 1, 6), style: str(spec.style, 500).trim(),
+    fps: clamp(Math.round(+spec.fps) || 12, 12, 60), size,
+    mode: noRefs ? 'none' : MODES.includes(spec.mode) ? spec.mode : 'chain',
+    concurrency: clamp(Math.max(Math.round(+spec.concurrency) || 1, noRefs ? 3 : 1), 1, 6), keyEvery: clamp(Math.round(+spec.keyEvery) || 1, 1, 6),
+    style: str(spec.style, 500).trim(),
     enrichAuto: !!spec.enrichAuto, enriched: false, globalRefs: validRefs(spec.globalRefs),
+    series: spec.series && store.ID_RE.test(spec.series.id || '') ? { id: spec.series.id, title: str(spec.series.title, 120), ep: +spec.series.ep || 1, of: +spec.series.of || 1 } : null,
     scenes: spec.scenes.map((s, i) => {
       const prompt = str(s.prompt, 4000).trim();
       if (!prompt) throw httpError(400, `La scène #${i + 1} n'a pas de prompt`);
       return { name: str(s.name, 80) || 'Scène ' + (i + 1), prompt, motion: str(s.motion, 500).trim(), endPrompt: str(s.endPrompt, 500).trim(), duration: clamp(+s.duration || 3, 0.5, 600), refs: validRefs(s.refs) };
     }),
-    done: '', error: '', note: '', video: null, lastFrame: -1, spf: 0, assemble: 0,
+    done: '', error: '', note: '', video: null, lastFrame: -1, spf: 0, assemble: 0, log: [], logSeq: 0,
   };
-  const total = plan(job).length;
-  if (total > 5000) throw httpError(400, `Trop d'images (${total}, max 5000) : réduis la durée ou les images/seconde`);
-  job.done = '0'.repeat(total);
+  const pl = plan(job);
+  if (pl.length > 5000) throw httpError(400, `Trop d'images (${pl.length}, max 5000) : réduis la durée ou les images/seconde`);
+  job.done = pl.map((f) => (isKey(f, job.keyEvery) ? '0' : '-')).join('');
   fs.mkdirSync(framesDir(job.id), { recursive: true });
   jobs.set(job.id, job);
+  log(job, 'info', `Instance créée : ${pl.length} images vidéo, ${countGen(job)} à générer via ${settings.providers[provider].label} (${job.size}, ${job.fps} img/s, mode ${job.mode}${job.keyEvery > 1 ? `, 1 image IA sur ${job.keyEvery} + interpolation` : ''})`);
+  if (noRefs && spec.mode !== 'none') log(job, 'warn', `${settings.providers[provider].label} ne gère pas les images de référence : images indépendantes`);
   persist(job, true);
   start(job);
   return job;
 }
 function cloneJob(job) {
-  return createJob({ ...job, title: job.title + ' (copie)', enrichAuto: false });
+  return createJob({ ...job, title: job.title + ' (copie)', enrichAuto: false, series: null });
+}
+
+/* ---------- Séries ---------- */
+async function seriesIdeas(job, count) {
+  count = clamp(Math.round(+count) || 3, 1, 12);
+  return providers.seriesIdeas(job.provider, { title: job.title, style: job.style, prompts: job.scenes.map((s) => s.prompt) }, count);
+}
+async function createSeries(origin, episodes, keepContinuity) {
+  if (!Array.isArray(episodes) || !episodes.length) throw httpError(400, 'Aucun épisode');
+  if (episodes.length > 12) throw httpError(400, '12 épisodes maximum à la fois');
+  const total = origin.scenes.reduce((a, s) => a + s.duration, 0);
+  const base = (origin.series && origin.series.title) || origin.title.replace(/\s*\(copie\)$/, '');
+  const sid = (origin.series && origin.series.id) || 's_' + uid();
+  const of = (origin.series ? origin.series.of : 1) + episodes.length;
+  const firstEp = (origin.series ? origin.series.of : 1) + 1;
+  const refs = [...origin.globalRefs];
+  if (keepContinuity) {
+    for (const s of origin.scenes) for (const r of s.refs) if (!refs.includes(r)) refs.push(r);
+    const last = origin.done.lastIndexOf('1');
+    if (last >= 0) {
+      const id = 'a_' + uid();
+      await fsp.writeFile(assetPath(id), await media.toJpeg(await fsp.readFile(framePath(origin.id, last)), 1024));
+      refs.unshift(id);
+    }
+  }
+  if (!origin.series) { origin.series = { id: sid, title: base, ep: 1, of }; }
+  else origin.series.of = of;
+  log(origin, 'info', `Converti en série « ${base} » : ${episodes.length} nouveaux épisodes`);
+  persist(origin, true);
+  return episodes.map((e, i) => createJob({
+    ...origin, title: `${base} – ${String(e.title || `Épisode ${firstEp + i}`).slice(0, 80)}`, enrichAuto: false,
+    globalRefs: refs.slice(0, 10), series: { id: sid, title: base, ep: firstEp + i, of },
+    scenes: [{ name: String(e.title || 'Épisode').slice(0, 80), prompt: String(e.prompt || ''), duration: total, motion: '', endPrompt: '', refs: [] }],
+  }));
 }
 
 /* ---------- Exécution ---------- */
@@ -84,8 +138,9 @@ class Runner {
     this.job = job; this.plan = plan(job); this.ctl = new AbortController();
     this.inflight = new Set(); this.cache = new Map(); this.failed = false; this.waiters = []; this.lastDone = Date.now();
   }
-  isDone(i) { return this.job.done[i] === '1'; }
+  isDone(i) { return this.job.done[i] !== '0'; }
   setDone(i) { const d = this.job.done; this.job.done = d.slice(0, i) + '1' + d.slice(i + 1); }
+  prevGen(i) { for (let j = i - 1; j >= 0; j--) if (this.job.done[j] !== '-') return j; return -1; }
   firstIdx(si) { return this.plan.findIndex((f) => f.si === si); }
   notify() { const w = this.waiters; this.waiters = []; w.forEach((f) => f()); }
   waitChange() { return new Promise((res) => this.waiters.push(res)); }
@@ -93,9 +148,9 @@ class Runner {
   pick() {
     for (let i = 0; i < this.plan.length; i++) {
       if (this.isDone(i) || this.inflight.has(i)) continue;
-      const f = this.plan[i];
-      if (this.job.mode === 'chain' && i > 0 && !this.isDone(i - 1)) return -1;
-      if (this.job.mode === 'anchor' && f.k > 0 && !this.isDone(this.firstIdx(f.si))) continue;
+      const f = this.plan[i], pg = this.prevGen(i);
+      if (this.job.mode === 'chain' && pg >= 0 && this.job.done[pg] !== '1') return -1;
+      if (this.job.mode === 'anchor' && f.k > 0 && this.job.done[this.firstIdx(f.si)] !== '1') continue;
       return i;
     }
     return -1;
@@ -105,26 +160,29 @@ class Runner {
     const job = this.job;
     job.status = 'running'; job.error = ''; job.note = '';
     this.lastDone = Date.now();
+    log(job, 'info', `▶ Démarrage (${countDone(job)}/${countGen(job)} images déjà générées)`);
     persist(job, true);
     if (job.enrichAuto && !job.enriched) await this.enrich();
     if (this.ctl.signal.aborted) return;
     const conc = job.mode === 'chain' ? 1 : clamp(job.concurrency, 1, 6);
     await Promise.all(Array.from({ length: conc }, () => this.worker()));
     if (this.ctl.signal.aborted) return;
-    if (this.failed) { job.status = 'error'; persist(job, true); return; }
+    if (this.failed) { job.status = 'error'; log(job, 'err', job.error); persist(job, true); return; }
     if (!job.done.includes('0')) await assemble(job); else { job.status = 'paused'; persist(job, true); }
   }
 
   async enrich() {
     const job = this.job;
     job.note = 'Enrichissement des prompts…';
+    log(job, 'info', `Enrichissement de ${job.scenes.length} prompt(s) en un seul appel`);
     try {
-      for (const s of job.scenes) s.prompt = await providers.chat(job.provider, s.prompt, this.ctl.signal);
+      const out = await providers.enhanceMany(job.provider, job.scenes.map((s) => s.prompt), this.ctl.signal);
+      job.scenes.forEach((s, i) => { s.prompt = out[i]; log(job, 'info', `  scène ${i + 1} : ${out[i].slice(0, 160)}`); });
     } catch (e) {
       if (e.name === 'AbortError') return;
-      job.note = 'Enrichissement ignoré : ' + e.message;
+      log(job, 'warn', 'Enrichissement ignoré : ' + e.message);
     }
-    job.enriched = true; if (job.note === 'Enrichissement des prompts…') job.note = '';
+    job.enriched = true; job.note = '';
     persist(job);
   }
 
@@ -143,30 +201,44 @@ class Runner {
   }
 
   async cached(key, fn) {
-    if (!this.cache.has(key)) { this.cache.set(key, await fn()); if (this.cache.size > 8) this.cache.delete(this.cache.keys().next().value); }
+    if (!this.cache.has(key)) {
+      const pr = fn();
+      this.cache.set(key, pr);
+      pr.catch(() => this.cache.delete(key));
+      if (this.cache.size > 8) this.cache.delete(this.cache.keys().next().value);
+    }
     return this.cache.get(key);
   }
 
   async frame(i) {
     const job = this.job, sig = this.ctl.signal, f = this.plan[i], scene = job.scenes[f.si];
     const refs = [];
-    const fromFrame = (k) => this.cached('f' + k, async () => media.toJpeg(await fsp.readFile(framePath(job.id, k)), 768));
-    if (job.mode === 'chain' && i > 0) refs.push(await fromFrame(i - 1));
+    const fromFrame = (k) => this.cached('f' + k, async () => media.toJpeg(await fsp.readFile(framePath(job.id, k)), 640));
+    const pg = this.prevGen(i);
+    if (job.mode === 'chain' && pg >= 0) refs.push(await fromFrame(pg));
     else if (job.mode === 'anchor' && f.k > 0) refs.push(await fromFrame(this.firstIdx(f.si)));
     for (const id of [...scene.refs, ...job.globalRefs]) {
       try { refs.push(await this.cached(id, () => fsp.readFile(assetPath(id)))); } catch { /* référence supprimée : ignorée */ }
     }
     const images = refs.slice(0, store.getSettings().maxRefs);
     const prompt = framePrompt(job, scene, f.k, f.n);
+    const rank = countDone(job) + 1, tot = countGen(job);
+    log(job, 'dbg', `→ image ${rank}/${tot} (n°${i + 1}) envoyée · ${images.length} réf. · ${prompt.slice(0, 140)}`);
+    const t0 = Date.now();
     const buf = await retry(async () => {
       await providers.acquire(job.provider, sig);
-      const t0 = Date.now();
+      const t = Date.now();
       const b = await providers.image(job.provider, { prompt, size: job.size, refs: images }, sig);
-      store.noteLatency(job.provider, Date.now() - t0);
+      store.noteLatency(job.provider, Date.now() - t);
       return b;
-    }, sig, (e, n) => { job.note = `Nouvel essai ${n}/4 : ${e.message}`; });
-    const png = await media.toPng(buf);
+    }, sig, (e, n, wait) => { job.note = `Nouvel essai ${n}/4 : ${e.message}`; log(job, 'warn', `Image n°${i + 1} : ${e.message} — nouvel essai ${n}/4 dans ${(wait / 1000).toFixed(0)} s`); });
+
+    // PNG pour l'assemblage + miniature de référence pour l'image suivante, en parallèle
     const file = framePath(job.id, i);
+    const [png] = await Promise.all([
+      media.toPng(buf),
+      job.mode !== 'none' ? this.cached('f' + i, () => media.toJpeg(buf, 640)).catch(() => {}) : null,
+    ]);
     await fsp.writeFile(file + '.tmp', png);
     await fsp.rename(file + '.tmp', file);
     this.setDone(i);
@@ -174,6 +246,7 @@ class Runner {
     const now = Date.now(), iv = (now - this.lastDone) / 1000;
     this.lastDone = now;
     job.spf = job.spf ? job.spf * 0.7 + iv * 0.3 : iv;
+    log(job, 'ok', `✓ image ${countDone(job)}/${tot} reçue en ${((now - t0) / 1000).toFixed(1)} s (${(png.length / 1024).toFixed(0)} Ko)`);
     persist(job);
   }
 }
@@ -182,40 +255,47 @@ function start(job) {
   if (runners.has(job.id) || job.status === 'assembling') return;
   const r = new Runner(job);
   runners.set(job.id, r);
-  r.run().catch((e) => { job.status = 'error'; job.error = e.message; persist(job, true); })
+  r.run().catch((e) => { job.status = 'error'; job.error = e.message; log(job, 'err', e.message); persist(job, true); })
     .finally(() => { if (runners.get(job.id) === r) runners.delete(job.id); });
 }
 function pause(job) {
   const r = runners.get(job.id);
   if (r) { r.ctl.abort(); runners.delete(job.id); }
-  if (job.status === 'running') { job.status = 'paused'; job.note = ''; }
+  if (job.status === 'running') { job.status = 'paused'; job.note = ''; log(job, 'info', '⏸ Mise en pause'); }
   persist(job, true);
 }
 
 async function assemble(job) {
   if (job.status === 'assembling') return;
   job.status = 'assembling'; job.error = ''; job.note = ''; job.assemble = 0;
+  log(job, 'info', '🎬 Assemblage de la vidéo (ffmpeg)…');
   persist(job, true);
   const seq = path.join(jobDir(job.id), 'seq');
+  const t0 = Date.now();
   try {
     await fsp.rm(seq, { recursive: true, force: true });
     await fsp.mkdir(seq, { recursive: true });
     const total = job.done.length;
+    const idxs = [...job.done].map((c, i) => (c === '-' ? -1 : i)).filter((i) => i >= 0);   // images à placer dans la séquence
     let last = job.done.indexOf('1');
     if (last < 0) throw new Error('aucune image générée');
     let frames = 0;
-    for (let i = 0; i < total; i++) {      // images manquantes : on répète la précédente
-      if (job.done[i] === '1') { last = i; frames++; }
-      await fsp.symlink(framePath(job.id, last), path.join(seq, String(i + 1).padStart(5, '0') + '.png'));
+    for (let k = 0; k < idxs.length; k++) {   // images manquantes : on répète la précédente
+      if (job.done[idxs[k]] === '1') { last = idxs[k]; frames++; }
+      await fsp.symlink(framePath(job.id, last), path.join(seq, String(k + 1).padStart(5, '0') + '.png'));
     }
+    const interp = job.keyEvery > 1 && idxs.length < total;
     const out = videoPath(job.id) + '.tmp.mp4';
-    await media.encodeVideo(path.join(seq, '%05d.png'), job.fps, out, total, (p) => { job.assemble = p; });
+    await media.encodeVideo(path.join(seq, '%05d.png'), {
+      inFps: interp ? job.fps * idxs.length / total : job.fps, outFps: job.fps, interp: interp ? INTERP : null,
+    }, out, total, (p) => { job.assemble = p; });
     await fsp.rename(out, videoPath(job.id));
     const st = await fsp.stat(videoPath(job.id));
     job.video = { size: st.size, at: Date.now(), frames };
     job.status = job.done.includes('0') ? 'paused' : 'done';
+    log(job, 'ok', `✓ Vidéo prête : ${(st.size / 1048576).toFixed(1)} Mo en ${((Date.now() - t0) / 1000).toFixed(1)} s${interp ? ' (interpolation ' + INTERP + ')' : ''}`);
   } catch (e) {
-    job.status = 'error'; job.error = 'Assemblage : ' + e.message;
+    job.status = 'error'; job.error = 'Assemblage : ' + e.message; log(job, 'err', job.error);
   }
   job.assemble = 0;
   await fsp.rm(seq, { recursive: true, force: true }).catch(() => {});
@@ -237,13 +317,13 @@ function boot() {
   }
   // reprise automatique après un redémarrage du serveur
   for (const job of jobs.values()) {
-    if (job.status === 'running') start(job);
+    if (job.status === 'running') { log(job, 'info', '↻ Reprise après redémarrage du serveur'); start(job); }
     else if (job.status === 'assembling') { job.status = 'paused'; assemble(job); }
   }
   console.log(`${jobs.size} instance(s) chargée(s)`);
 }
 
-const list = () => [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt);
+const list = () => [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt).map(slim);
 const get = (id) => jobs.get(id);
 
-module.exports = { boot, list, get, createJob, cloneJob, start, pause, assemble, remove, flushAll, framePrompt, plan, framePath, videoPath, assetPath, httpError };
+module.exports = { boot, list, get, slim, createJob, cloneJob, seriesIdeas, createSeries, logLines, start, pause, assemble, remove, flushAll, framePrompt, plan, framePath, videoPath, assetPath, httpError };

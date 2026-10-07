@@ -41,7 +41,7 @@ http.createServer((req, res) => {
     const edits = req.url.endsWith('/images/edits');
     if (req.url.endsWith('/images/generations') || edits) {
       n++;
-      const size = edits ? (/name="size"\r\n\r\n([^\r]+)/.exec(body) || [])[1] : j.size;
+      const size = edits ? (/name="size"\r\n\r\n([^\r]+)/.exec(body) || [])[1] : j.size || (j.width ? j.width + 'x' + j.height : '');
       const refs = edits ? (body.match(/name="image(\[\])?"/g) || []).length : Array.isArray(j.image) ? j.image.length : j.image ? 1 : 0;
       const prompt = edits ? (/name="prompt"\r\n\r\n([^\r]+)/.exec(body) || [])[1] : j.prompt;
       console.log(edits ? 'edit' : 'image', n, size, 'refs:', refs, '|', (prompt || '').slice(0, 70));
@@ -49,8 +49,17 @@ http.createServer((req, res) => {
       return setTimeout(() => res.end(JSON.stringify({ data: [{ b64_json: png(w, h, n).toString('base64') }] })), 300);
     }
     if (req.url.endsWith('/chat/completions')) {
-      const u = (j.messages || []).slice(-1)[0]?.content || '';
-      return res.end(JSON.stringify({ choices: [{ message: { content: 'Enhanced: ' + u } }] }));
+      const sys = (j.messages || [])[0]?.content || '', u = (j.messages || []).slice(-1)[0]?.content || '';
+      let out = 'Enhanced: ' + u;
+      if (/screenwriter/.test(sys)) { const c = +(/exactly (\d+)/.exec(sys) || [])[1] || 3; out = 'Voici : ' + JSON.stringify(Array.from({ length: c }, (_, i) => ({ title: 'Suite ' + (i + 1), prompt: 'Episode idea ' + (i + 1) + ' based on ' + u.slice(0, 30) }))); }
+      else if (/JSON array/.test(sys)) out = JSON.stringify(JSON.parse(u).map((t) => 'Enhanced: ' + t));
+      return res.end(JSON.stringify({ choices: [{ message: { content: out } }] }));
+    }
+    if (/\/run\//.test(req.url) || /\/models\//.test(req.url)) {      // cloudflare / hugging face
+      n++; console.log('raw', n, req.url.slice(0, 60), body.slice(0, 80));
+      const cf = /\/run\//.test(req.url), png1 = png(64, 36, n);
+      res.setHeader('content-type', cf ? 'application/json' : 'image/png');
+      return setTimeout(() => res.end(cf ? JSON.stringify({ result: { image: png1.toString('base64') }, success: true }) : png1), 300);
     }
     res.statusCode = 404; res.end('{}');
   });

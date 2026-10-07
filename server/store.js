@@ -25,20 +25,50 @@ const DEFAULTS = {
   enhancePrompt: DEFAULT_ENHANCE,
   providers: {
     agnes: {
-      label: 'Agnes AI', baseUrl: 'https://apihub.agnes-ai.com/v1', apiKey: '',
+      label: 'Agnes AI', type: 'openai', baseUrl: 'https://apihub.agnes-ai.com/v1', apiKey: '',
       imageModel: 'agnes-image-2.1-flash', editModel: '', chatModel: 'agnes-2.5-flash',
-      rpm: 15, refMode: 'field', refField: 'image', refArray: true,
+      rpm: 15, refMode: 'field', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '',
       keyUrl: 'https://platform.agnes-ai.com',
+      help: 'Texte → image et références. Clé gratuite à la création du compte.',
     },
     pollinations: {
-      label: 'Pollinations AI', baseUrl: 'https://gen.pollinations.ai/v1', apiKey: '',
+      label: 'Pollinations AI', type: 'openai', baseUrl: 'https://gen.pollinations.ai/v1', apiKey: '',
       imageModel: '', editModel: 'kontext', chatModel: 'openai-fast',
-      rpm: 10, refMode: 'edits', refField: 'image', refArray: true,
+      rpm: 10, refMode: 'edits', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '',
       keyUrl: 'https://enter.pollinations.ai',
+      help: 'Références via /images/edits. Les noms de modèles évoluent : ajuste-les si besoin.',
+    },
+    together: {
+      label: 'Together AI', type: 'openai', baseUrl: 'https://api.together.xyz/v1', apiKey: '',
+      imageModel: 'black-forest-labs/FLUX.1-schnell-Free', editModel: '', chatModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',
+      rpm: 6, refMode: 'none', refField: 'image', refArray: true, sizeMode: 'wh', extraBody: '{"steps":4}',
+      keyUrl: 'https://api.together.ai/settings/api-keys',
+      help: 'FLUX.1 schnell gratuit (très rapide). Texte → image uniquement : pas de références, images indépendantes.',
+    },
+    cloudflare: {
+      label: 'Cloudflare Workers AI', type: 'cloudflare', baseUrl: 'https://api.cloudflare.com/client/v4/accounts/VOTRE_ACCOUNT_ID/ai', apiKey: '',
+      imageModel: '@cf/black-forest-labs/flux-1-schnell', editModel: '', chatModel: '',
+      rpm: 20, refMode: 'none', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '{"steps":4}',
+      keyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+      help: 'Remplace VOTRE_ACCOUNT_ID dans l\'URL (Avancé) et crée un token « Workers AI ». Quota gratuit quotidien. Texte → image uniquement.',
+    },
+    huggingface: {
+      label: 'Hugging Face', type: 'hf', baseUrl: 'https://router.huggingface.co/hf-inference', apiKey: '',
+      imageModel: 'black-forest-labs/FLUX.1-schnell', editModel: '', chatModel: '',
+      rpm: 10, refMode: 'none', refField: 'image', refArray: true, sizeMode: 'wh', extraBody: '',
+      keyUrl: 'https://huggingface.co/settings/tokens',
+      help: 'Crédits gratuits mensuels. Token avec droit « Inference Providers ». Texte → image uniquement.',
+    },
+    custom: {
+      label: 'Personnalisé (compatible OpenAI)', custom: true, type: 'openai', baseUrl: 'https://api.exemple.com/v1', apiKey: '',
+      imageModel: '', editModel: '', chatModel: '',
+      rpm: 10, refMode: 'field', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '',
+      keyUrl: 'https://github.com/public-apis/public-apis#machine-learning',
+      help: 'Tout service exposant /images/generations (et /chat/completions pour l\'enrichissement).',
     },
   },
 };
-const ENV_KEYS = { agnes: 'AGNES_API_KEY', pollinations: 'POLLINATIONS_API_KEY' };
+const ENV_KEYS = { agnes: 'AGNES_API_KEY', pollinations: 'POLLINATIONS_API_KEY', together: 'TOGETHER_API_KEY', cloudflare: 'CLOUDFLARE_API_TOKEN', huggingface: 'HF_TOKEN', custom: 'CUSTOM_API_KEY' };
 
 let settings = load();
 function load() {
@@ -74,12 +104,19 @@ function updateSettings(patch) {
     const p = settings.providers[id];
     if (!p || !pp) continue;
     for (const k of ['imageModel', 'editModel', 'chatModel', 'refField']) if (typeof pp[k] === 'string') p[k] = pp[k].trim();
+    if (p.custom && typeof pp.label === 'string' && pp.label.trim()) p.label = pp.label.trim().slice(0, 60);
+    if (typeof pp.extraBody === 'string') {
+      const t = pp.extraBody.trim();
+      if (t) { try { const o = JSON.parse(t); if (!o || typeof o !== 'object' || Array.isArray(o)) throw 0; } catch { throw Object.assign(new Error('« Paramètres supplémentaires » doit être un objet JSON valide'), { status: 400 }); } }
+      p.extraBody = t;
+    }
+    if (pp.sizeMode === 'size' || pp.sizeMode === 'wh') p.sizeMode = pp.sizeMode;
     if (typeof pp.baseUrl === 'string') {
       if (!/^https?:\/\/[^\s]+$/i.test(pp.baseUrl.trim())) throw Object.assign(new Error('URL de base invalide'), { status: 400 });
       p.baseUrl = pp.baseUrl.trim().replace(/\/+$/, '');
     }
     if (pp.rpm !== undefined) p.rpm = Math.min(600, Math.max(1, Math.round(+pp.rpm) || 10));
-    if (pp.refMode === 'field' || pp.refMode === 'edits') p.refMode = pp.refMode;
+    if (['field', 'edits', 'none'].includes(pp.refMode)) p.refMode = pp.refMode;
     if (typeof pp.refArray === 'boolean') p.refArray = pp.refArray;
     if (typeof pp.apiKey === 'string' && pp.apiKey.trim()) p.apiKey = pp.apiKey.trim();
     if (pp.clearKey) p.apiKey = '';

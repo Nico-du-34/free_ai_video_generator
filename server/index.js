@@ -72,8 +72,17 @@ async function api(req, res, url) {
   if (p === '/api/settings' && m === 'PUT') { store.updateSettings(await readJson(req)); return send(res, 200, store.publicSettings()); }
   if (p === '/api/test' && m === 'POST') {
     const b = await readJson(req);
-    const out = await providers.chat(b.provider, 'a red apple');
-    return send(res, 200, { ok: true, sample: out.slice(0, 120) });
+    const pc = store.getSettings().providers[b.provider] && store.providerCfg(b.provider);
+    if (!pc) throw engine.httpError(400, 'Fournisseur inconnu');
+    if (!pc.apiKey) throw engine.httpError(400, `Clé API ${pc.label} manquante`);
+    if (pc.type === 'openai' && pc.chatModel) {
+      const out = await providers.chat(b.provider, 'a red apple');
+      return send(res, 200, { ok: true, sample: out.slice(0, 120) });
+    }
+    const t0 = Date.now();                     // pas de modèle texte : on teste avec une vraie image
+    await providers.acquire(b.provider);
+    await providers.image(b.provider, { prompt: 'a red apple', size: '512x512' });
+    return send(res, 200, { ok: true, sample: `image générée en ${((Date.now() - t0) / 1000).toFixed(1)} s` });
   }
   if (p === '/api/enhance' && m === 'POST') {
     const b = await readJson(req);
@@ -114,20 +123,26 @@ async function api(req, res, url) {
     if (!store.ID_RE.test(r[1])) return send(res, 404, { error: 'Introuvable' });
     return sendFile(req, res, engine.assetPath(r[1]), 'image/jpeg', { cache: 'public, max-age=31536000, immutable' });
   }
-  if (p === '/api/jobs' && m === 'POST') return send(res, 201, engine.createJob(await readJson(req, 2e6)));
+  if (p === '/api/jobs' && m === 'POST') return send(res, 201, engine.slim(engine.createJob(await readJson(req, 2e6))));
 
   if ((r = /^\/api\/jobs\/([a-z0-9_]+)(?:\/([a-z]+)(?:\/(\d+))?)?$/i.exec(p))) {
     const job = engine.get(r[1]);
     if (!job) return send(res, 404, { error: 'Instance introuvable' });
     const action = r[2];
     if (!action && m === 'DELETE') { await engine.remove(job); return send(res, 200, { ok: true }); }
-    if (action === 'pause' && m === 'POST') { engine.pause(job); return send(res, 200, job); }
-    if (action === 'resume' && m === 'POST') { if (job.status !== 'done') engine.start(job); return send(res, 200, job); }
+    if (action === 'pause' && m === 'POST') { engine.pause(job); return send(res, 200, engine.slim(job)); }
+    if (action === 'resume' && m === 'POST') { if (job.status !== 'done') engine.start(job); return send(res, 200, engine.slim(job)); }
     if (action === 'assemble' && m === 'POST') {
       if (job.status === 'running' || job.status === 'assembling') throw engine.httpError(409, 'Instance occupée');
-      engine.assemble(job); return send(res, 202, job);
+      engine.assemble(job); return send(res, 202, engine.slim(job));
     }
-    if (action === 'clone' && m === 'POST') return send(res, 201, engine.cloneJob(job));
+    if (action === 'clone' && m === 'POST') return send(res, 201, engine.slim(engine.cloneJob(job)));
+    if (action === 'log' && m === 'GET') return send(res, 200, engine.logLines(job, +url.searchParams.get('since') || 0));
+    if (action === 'series' && m === 'POST') {
+      const b = await readJson(req);
+      if (r[3] === undefined && b.ideas) return send(res, 200, { ideas: await engine.seriesIdeas(job, b.count) });
+      return send(res, 201, { jobs: (await engine.createSeries(job, b.episodes, b.keepContinuity !== false)).map(engine.slim) });
+    }
     if (action === 'frame' && m === 'GET') {
       const i = +r[3];
       if (!(job.done[i] === '1')) return send(res, 404, { error: 'Image non générée' });
