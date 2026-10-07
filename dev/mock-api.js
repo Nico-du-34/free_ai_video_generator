@@ -32,6 +32,8 @@ function png(w, h, seed) {
 }
 const { execFileSync } = require('child_process');
 const tone = (f, d) => execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', `sine=f=${f}:d=${d}`, '-f', 'mp3', 'pipe:1'], { maxBuffer: 1e7 });
+const mp4 = () => execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24:duration=3', '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1'], { maxBuffer: 1e8 });
+const polls = {};
 let n = 0;
 http.createServer((req, res) => {
   let body = '';
@@ -55,6 +57,10 @@ http.createServer((req, res) => {
     if (/\/v1\/credits$/.test(req.url)) return res.end(JSON.stringify({ balance: 7, currency: 'credits' }));
     if (/tokens\/verify/.test(req.url)) return res.end(JSON.stringify({ success: true, result: { status: 'active', expires_on: '2027-01-01T00:00:00Z' } }));
     if (/whoami-v2/.test(req.url)) return res.end(JSON.stringify({ name: 'tester', type: 'user', isPro: false }));
+    if (/\/v1\/videos$/.test(req.url)) { const id = 'vid_' + (++n); polls[id] = 0; console.log('video submit', id, body.slice(0, 160)); return res.end(JSON.stringify({ video_id: id, task_id: 't_' + id, status: 'queued' })); }
+    if (/\/agnesapi\?video_id=/.test(req.url)) { const id = /video_id=([^&]+)/.exec(req.url)[1]; polls[id] = (polls[id] || 0) + 1; console.log('video poll', id, polls[id]); return res.end(JSON.stringify(polls[id] < 2 ? { status: 'processing', progress: 40 } : { status: 'succeeded', data: { video_url: 'http://127.0.0.1:9099/files/clip.mp4' } })); }
+    if (/\/files\/clip\.mp4/.test(req.url)) { res.setHeader('content-type', 'video/mp4'); return res.end(mp4()); }
+    if (/^\/video\//.test(req.url)) { console.log('video pollinations', decodeURIComponent(req.url).slice(0, 150)); res.setHeader('content-type', 'video/mp4'); return setTimeout(() => res.end(mp4()), 800); }
     const edits = req.url.endsWith('/images/edits');
     if (req.url.endsWith('/images/generations') || edits) {
       n++;

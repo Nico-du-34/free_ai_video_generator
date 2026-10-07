@@ -6,6 +6,12 @@ const DATA = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'da
 const dirs = { root: DATA, jobs: path.join(DATA, 'jobs'), assets: path.join(DATA, 'assets') };
 Object.values(dirs).forEach((d) => fs.mkdirSync(d, { recursive: true }));
 
+const crypto = require('crypto');
+const SECRET_FILE = path.join(DATA, 'secret.key');
+let SECRET;
+try { SECRET = fs.readFileSync(SECRET_FILE, 'utf8').trim(); } catch { SECRET = crypto.randomBytes(24).toString('hex'); fs.writeFileSync(SECRET_FILE, SECRET, { mode: 0o600 }); }
+const sign = (text) => crypto.createHmac('sha256', SECRET).update(text).digest('hex').slice(0, 24);
+
 const ID_RE = /^[a-z0-9_]{3,40}$/i;
 
 function readJSON(file, def) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return def; } }
@@ -36,6 +42,7 @@ const DEFAULTS = {
       rpm: 15, dailyLimit: 4000, refMode: 'field', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '',
       keyUrl: 'https://platform.agnes-ai.com',
       account: 'probe', dashUrl: 'https://platform.agnes-ai.com',
+      videoKind: 'agnes', videoModel: 'agnes-video-v2.0', videoMaxClip: 5, videoRpm: 1, videoDailySeconds: 500, videoFps: 24,
       limitsNote: 'Limites officielles (référence) : 20 images/min en 1K, 10 en 2K, 1 en 3K et 4K · 4 000 images par jour. Aucun endpoint de solde n\'est documenté par Agnes.',
       help: 'Texte → image et références. Clé gratuite à la création du compte.',
     },
@@ -45,6 +52,7 @@ const DEFAULTS = {
       rpm: 10, refMode: 'edits', refField: 'image', refArray: true, sizeMode: 'size', extraBody: '',
       keyUrl: 'https://enter.pollinations.ai',
       account: 'pollinations', dashUrl: 'https://enter.pollinations.ai',
+      videoKind: 'pollinations', videoModel: '', videoMaxClip: 5, videoRpm: 2, videoDailySeconds: 0, videoFps: 24,
       help: 'Références via /images/edits. Les noms de modèles évoluent : ajuste-les si besoin.',
     },
     together: {
@@ -142,6 +150,10 @@ function updateSettings(patch) {
       if (!/^https?:\/\/[^\s]+$/i.test(pp.baseUrl.trim())) throw Object.assign(new Error('URL de base invalide'), { status: 400 });
       p.baseUrl = pp.baseUrl.trim().replace(/\/+$/, '');
     }
+    if (typeof pp.videoModel === 'string') p.videoModel = pp.videoModel.trim();
+    if (pp.videoMaxClip !== undefined) p.videoMaxClip = Math.min(30, Math.max(2, Math.round(+pp.videoMaxClip) || 5));
+    if (pp.videoRpm !== undefined) p.videoRpm = Math.min(60, Math.max(1, Math.round(+pp.videoRpm) || 1));
+    if (pp.videoDailySeconds !== undefined) p.videoDailySeconds = Math.min(1e6, Math.max(0, Math.round(+pp.videoDailySeconds) || 0));
     if (pp.dailyLimit !== undefined) p.dailyLimit = Math.min(1e6, Math.max(0, Math.round(+pp.dailyLimit) || 0));
     if (pp.rpm !== undefined) p.rpm = Math.min(600, Math.max(1, Math.round(+pp.rpm) || 10));
     if (['field', 'edits', 'none'].includes(pp.refMode)) p.refMode = pp.refMode;
@@ -160,4 +172,4 @@ function noteLatency(provider, ms) {
   try { writeJSON(statsFile, stats); } catch { /* non bloquant */ }
 }
 
-module.exports = { audioCfg, DATA, dirs, ID_RE, readJSON, writeJSON, getSettings, providerCfg, publicSettings, updateSettings, stats, noteLatency };
+module.exports = { sign, audioCfg, DATA, dirs, ID_RE, readJSON, writeJSON, getSettings, providerCfg, publicSettings, updateSettings, stats, noteLatency };

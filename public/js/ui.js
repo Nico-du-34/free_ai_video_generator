@@ -53,15 +53,26 @@ document.addEventListener('change', (e) => {
 
 /* ---------- Studio ---------- */
 const providers = () => (server.settings ? server.settings.providers : {});
+const hasVideo = (id) => !!(providers()[id] && providers()[id].videoKind);
 function ensureProvider() {
   const ps = providers();
   if (!ps[draft.provider]) draft.provider = (server.settings && server.settings.defaultProvider) || Object.keys(ps)[0] || '';
+  if (draft.engine === 'video' && !hasVideo(draft.provider)) draft.engine = 'slides';
+  if (!draft.engineChosen && hasVideo(draft.provider)) draft.engine = 'video';       // par défaut : vrai moteur vidéo quand il existe
+  if (!draft.engineChosen && !hasVideo(draft.provider)) draft.engine = 'slides';
 }
+const sceneLabel = (s) => (draft.engine === 'frames' ? sceneFrames(s) + ' images' : draft.engine === 'video' ? Math.max(1, Math.ceil(s.duration / ((providers()[draft.provider] || {}).videoMaxClip || 5) - 1e-9)) + ' clip(s)' : Math.max(1, Math.ceil(s.duration / (+draft.slideSec || 3) - 1e-9)) + ' image(s) clés');
 const sceneFrames = (s) => Math.max(1, Math.round((+s.duration || 0) * draft.fps));
 
 
 const IDEAS = ['Un astronaute marche sur la lune', 'Un dragon survole un village médiéval au lever du soleil', 'Une voiture de sport roule dans une ville néon sous la pluie', 'Un chat joue avec une pelote de laine, style dessin animé', 'Des vagues sur une plage tropicale au coucher du soleil', 'Une fleur qui s\'ouvre en accéléré'];
 const DURS = [3, 5, 10, 20, 30, 60];
+const ENGINE_OPTS = [['video', '🎬 Vidéo IA', 'vrai mouvement'], ['slides', '🖼 Images animées', 'rapide et fluide'], ['frames', '🎞 Image par image', 'expérimental']];
+const ENGINE_HINT = {
+  video: 'Un vrai modèle vidéo génère des clips de quelques secondes (mouvement réel), assemblés en une seule vidéo. Plus lent : environ 1 clip par minute avec Agnes (quota gratuit : 500 s de vidéo par jour).',
+  slides: 'Chaque scène est découpée en images clés générées par l\'IA, puis animées : zoom, panoramique et fondus enchaînés. Rapide et très fluide, mais le mouvement vient de la caméra, pas des personnages.',
+  frames: 'Une image IA par image vidéo : le mouvement est saccadé et peu cohérent, ce n\'est pas une vraie vidéo. Réservé aux essais.',
+};
 const SPEEDS = [
   ['quality', 'Qualité', { mode: 'chain', concurrency: 1, keyEvery: 1 }, 'Chaque image part de la précédente : le plus cohérent, mais le plus lent.'],
   ['balanced', 'Équilibré', { mode: 'anchor', concurrency: 3, keyEvery: 1 }, '3 images en parallèle à partir de la 1ʳᵉ de la scène : environ 3× plus rapide.'],
@@ -96,12 +107,17 @@ function renderSimple() {
   $('#ideas').innerHTML = multi ? '' : IDEAS.map((t) => `<button data-idea="${esc(t)}">${esc(t)}</button>`).join('');
   $('#durChips').innerHTML = DURS.map((v) => chip('dur', v, v < 60 ? v + ' s' : '1 min', false)).join('');
   $('#sizeChips').innerHTML = SIZES.map(([v, r, l, [w, h]]) => chip('size', v, `<i style="width:${w}px;height:${h}px"></i>${l} <small>${r}</small>`, draft.size === v)).join('');
+  const eng = draft.engine;
+  $('#engineChips').innerHTML = ENGINE_OPTS.map(([id, l, sub]) => chip('engine', id, `${l} <small>${sub}</small>`, eng === id, id === 'video' && !hasVideo(draft.provider) ? 'off' : '')).join('');
+  $('#engineHint').textContent = ENGINE_HINT[eng];
+  $('#gSlide').hidden = eng !== 'slides'; $('#gSpeed').hidden = eng === 'video'; $('#gRes').hidden = eng === 'video'; $('#gFps').hidden = eng !== 'frames';
+  $('#slideChips').innerHTML = [2, 3, 4, 6].map((v) => chip('slide', v, v + ' s', +draft.slideSec === v)).join('');
   const noRefs = (providers()[draft.provider] || {}).refMode === 'none';
   $('#speedChips').innerHTML = SPEEDS.map(([id, l, c]) => chip('speed', id, l, speedOf() === id)).join('');
   $('#speedHint').textContent = noRefs ? 'Cette IA ne gère pas les images de référence : les images sont indépendantes et générées en parallèle.' : (SPEEDS.find(([id]) => id === speedOf()) || [0, 0, 0, 'Réglage personnalisé (mode Avancé).'])[3];
   $('#resChips').innerHTML = [['std', 'Standard'], ['draft', 'Brouillon · plus rapide']].map(([v, l]) => chip('res', v, l, draft.res === v)).join('');
   $('#fpsChips').innerHTML = [[12, 'Standard · 12 img/s'], [18, 'Fluide · 18 img/s'], [24, 'Cinéma · 24 img/s']].map(([v, l]) => chip('fps', v, l, draft.fps === v)).join('');
-  $('#provChips').innerHTML = Object.entries(providers()).map(([id, p]) => chip('prov', id, esc(p.label) + (p.hasKey ? '' : ' <small>clé à ajouter</small>'), draft.provider === id)).join('');
+  $('#provChips').innerHTML = Object.entries(providers()).map(([id, p]) => chip('prov', id, esc(p.label) + (p.videoKind ? ' <small>vidéo</small>' : '') + (p.hasKey ? '' : ' <small>clé à ajouter</small>'), draft.provider === id)).join('');
   $('#sRefs').innerHTML = refsHtml(draft.globalRefs, 'global');
   const p = providers()[draft.provider], kp = $('#keyPrompt');
   kp.hidden = !p || p.hasKey;
@@ -113,7 +129,9 @@ function renderDurUi() {
   $$('#durChips [data-chip=dur]').forEach((b) => b.classList.toggle('on', +b.dataset.val === t));
   const sd = $('#sDur'); if (document.activeElement !== sd) sd.value = +t.toFixed(1);
   const td = $('#totalDur'); if (td && document.activeElement !== td) td.value = +t.toFixed(1);
-  $('#durHint').textContent = `${frames} images à générer (${draft.fps} images par seconde).`;
+  const e = estimate();
+  $('#durHint').textContent = draft.engine === 'video' ? `${e.frames} clip(s) vidéo IA de ${(providers()[draft.provider] || {}).videoMaxClip || 5} s maximum.`
+    : draft.engine === 'slides' ? `${e.frames} image(s) clé(s) animée(s) par zoom, panoramique et fondus.` : `${frames} images à générer (${draft.fps} images par seconde).`;
 }
 
 function renderStudio() {
@@ -129,7 +147,7 @@ function renderStudio() {
       <div class="scene-head">
         <span class="num">${i + 1}</span>
         <input class="title-input" type="text" data-f="name" value="${esc(s.name)}" placeholder="Nom de la scène" aria-label="Nom de la scène">
-        <span class="chip" data-frames>${sceneFrames(s)} images</span>
+        <span class="chip" data-frames>${sceneLabel(s)}</span>
         <div class="tools">
           <button class="icon-btn" data-act="sceneUp" title="Monter">${ico('up')}</button>
           <button class="icon-btn" data-act="sceneDown" title="Descendre">${ico('down')}</button>
@@ -160,6 +178,7 @@ function renderStudio() {
   renderSound();
   renderEstimate();
 }
+const v0 = (el) => el.value;
 function renderProviderHint() {
   const p = providers()[draft.provider];
   const h = $('#providerHint');
@@ -173,39 +192,48 @@ const effSize = () => {
   return `${Math.round(w * 0.625 / 8) * 8}x${Math.round(h * 0.625 / 8) * 8}`;
 };
 function estimate() {
-  const frames = draft.scenes.reduce((a, s) => a + sceneFrames(s), 0);
-  const ke = clamp(+draft.keyEvery || 1, 1, 6);
-  const gen = draft.scenes.reduce((a, s) => a + genCount(sceneFrames(s), ke), 0);
-  const videoSec = frames / draft.fps;
-  const p = providers()[draft.provider] || { rpm: 10 };
-  const lat = ((server.latency || {})[draft.provider] || 8000) / 1000;
+  const eng = draft.engine, p = providers()[draft.provider] || { rpm: 10 };
+  const total = totalDur(), lat = ((server.latency || {})[draft.provider] || 8000) / 1000;
+  const running = server.jobs.filter((j) => j.status === 'running' && j.provider === draft.provider).length;
+  if (eng === 'video') {
+    const clipMax = p.videoMaxClip || 5, clips = draft.scenes.reduce((a, s) => a + Math.max(1, Math.ceil(s.duration / clipMax - 1e-9)), 0);
+    const latV = ((server.latency || {})[draft.provider + ':video'] || 150000) / 1000;
+    const spf = Math.max(60 / (p.videoRpm || 1), latV);
+    const used = ((server.usageToday || {})[draft.provider] || {}).videoSec || 0, cap = p.videoDailySeconds || 0;
+    return { engine: eng, unit: 'clips', frames: clips, genFrames: clips, ke: 1, videoSec: total, spf, lat: latV, running, rpm: p.videoRpm || 1, measured: !!(server.latency || {})[draft.provider + ':video'], gen: clips * spf, total: clips * spf + 10 + total / 4, calls: clips + (draft.enrichAuto ? 1 : 0), quotaBound: 60 / (p.videoRpm || 1) >= latV, videoUsed: used, videoCap: cap, over: cap > 0 && used + total > cap };
+  }
+  const slide = eng === 'slides';
+  const frames = slide ? draft.scenes.reduce((a, s) => a + Math.max(1, Math.ceil(s.duration / (+draft.slideSec || 3) - 1e-9)), 0) : draft.scenes.reduce((a, s) => a + sceneFrames(s), 0);
+  const ke = slide ? 1 : clamp(+draft.keyEvery || 1, 1, 6);
+  const gen = slide ? frames : draft.scenes.reduce((a, s) => a + genCount(sceneFrames(s), ke), 0);
+  const videoSec = slide ? total : frames / draft.fps;
   const noRefs = p.refMode === 'none';
   const conc = noRefs ? Math.max(3, draft.concurrency) : draft.mode === 'chain' ? 1 : clamp(draft.concurrency, 1, 6);
-  const running = server.jobs.filter((j) => j.status === 'running' && j.provider === draft.provider).length;
   const quotaSpf = 60 / (p.rpm / (running + 1));
   const latSpf = lat / conc;
   const spf = Math.max(quotaSpf, latSpf);
-  return { frames, genFrames: gen, ke, videoSec, spf, lat, running, rpm: p.rpm, measured: !!(server.latency || {})[draft.provider], gen: gen * spf, total: gen * spf + (ke > 1 ? frames * 0.05 : 0) + 5 + frames / 120, calls: gen + (draft.enrichAuto ? 1 : 0), quotaBound: quotaSpf >= latSpf };
+  return { engine: eng, unit: slide ? 'images clés' : 'images', frames, genFrames: gen, ke, videoSec, spf, lat, running, rpm: p.rpm, measured: !!(server.latency || {})[draft.provider], gen: gen * spf, total: gen * spf + (ke > 1 ? frames * 0.05 : 0) + (slide ? total * 0.6 : 0) + 5 + frames / 120, calls: gen + (draft.enrichAuto ? 1 : 0), quotaBound: quotaSpf >= latSpf };
 }
 function renderEstimate() {
   const e = estimate();
   $('#estimate').innerHTML = `
     <div class="total"><span>Temps total estimé</span><strong>~${fmtDur(e.total)}</strong></div>
     <dl class="est">
-      <dt>Images de la vidéo</dt><dd>${e.frames}</dd>
-      <dt>Images générées par l'IA</dt><dd>${e.genFrames}${e.ke > 1 ? ` <small style="display:inline">(1 sur ${e.ke})</small>` : ''}</dd>
+      ${e.engine === 'video' ? `<dt>Clips vidéo IA</dt><dd>${e.frames}</dd>` : e.engine === 'slides' ? `<dt>Images clés à générer</dt><dd>${e.frames}</dd>` : `<dt>Images de la vidéo</dt><dd>${e.frames}</dd>
+      <dt>Images générées par l'IA</dt><dd>${e.genFrames}${e.ke > 1 ? ` <small style="display:inline">(1 sur ${e.ke})</small>` : ''}</dd>`}
       <dt>Durée de la vidéo</dt><dd>${e.videoSec.toFixed(1)} s</dd>
       <dt>Appels API</dt><dd>${e.calls}</dd>
-      <dt>Temps par image</dt><dd>~${e.spf.toFixed(1)} s</dd>
+      <dt>Temps par ${e.engine === 'video' ? 'clip' : e.engine === 'slides' ? 'image clé' : 'image'}</dt><dd>~${e.spf >= 90 ? fmtDur(e.spf) : e.spf.toFixed(1) + ' s'}</dd>
       <dt>Génération</dt><dd>~${fmtDur(e.gen)}</dd>
     </dl>
     <p class="fine">${e.measured ? `Latence mesurée : ${e.lat.toFixed(1)} s/image.` : 'Latence par défaut (8 s) — lance un aperçu pour la mesurer.'}
       Limité par ${e.quotaBound ? `le quota (${e.rpm} img/min${e.running ? `, partagé avec ${e.running} instance(s)` : ''})` : 'la latence de l\'API'}.</p>
+    ${e.engine === 'video' && e.videoCap ? `<p class="note ${e.over ? 'warn' : ''}" style="${e.over ? '' : 'background:var(--surface2);color:var(--muted)'}">Quota vidéo du jour : ${e.videoUsed} / ${e.videoCap} s utilisés${e.over ? ' — cette vidéo dépasse le quota restant, les derniers clips seront refusés.' : '.'}</p>` : ''}
     ${e.frames > 5000 ? '<p class="note warn">Plus de 5 000 images : impossible. Réduis la durée ou les images par seconde.</p>' : ''}
     ${e.frames > 1500 ? '<p class="note warn">Plus de 1 500 images : attention aux limites quotidiennes du fournisseur.</p>' : ''}
-    ${draft.mode === 'chain' && e.frames > 120 ? '<p class="note warn">Mode chaîné = séquentiel. « Ancrée » + parallèle va plus vite.</p>' : ''}`;
+    ${draft.engine === 'frames' && draft.mode === 'chain' && e.frames > 120 ? '<p class="note warn">Mode chaîné = séquentiel. « Ancrée » + parallèle va plus vite.</p>' : ''}`;
   renderDurUi();
-  $$('.scene').forEach((el) => { $('[data-frames]', el).textContent = sceneFrames(draft.scenes[+el.dataset.i]) + ' images'; });
+  $$('.scene').forEach((el) => { $('[data-frames]', el).textContent = sceneLabel(draft.scenes[+el.dataset.i]); });
 }
 
 document.addEventListener('input', (e) => {
@@ -215,6 +243,7 @@ document.addEventListener('input', (e) => {
     const k = el.dataset.d;
     draft[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' || el.dataset.num ? +el.value : el.value;
     if (k === 'mode') { $('[data-d=concurrency]').disabled = draft.mode === 'chain'; $('#modeHint').textContent = MODE_HINT[draft.mode]; }
+    if (k === 'engine') { if (v0(el) === 'video' && !hasVideo(draft.provider)) { draft.engine = 'slides'; el.value = 'slides'; toast('Cette IA ne fait pas de vidéo', 'err'); } draft.engineChosen = true; renderSimple(); }
     if (k === 'provider') renderProviderHint();
     saveDraft(); if (k !== 'title') renderEstimate();
   } else if (el.dataset.f) {
@@ -264,7 +293,7 @@ async function launch(btn) {
   const p = providers()[draft.provider];
   if (p && !p.hasKey) { toast(`Ajoute d'abord la clé ${p.label}`, 'err'); return showTab('settings'); }
   try {
-    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, size: effSize(), title: (!draft.title || draft.title === 'Ma vidéo') ? draft.scenes[0].prompt.trim().slice(0, 50) : draft.title, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs, narration }) => ({ name, prompt, motion, endPrompt, duration, refs, narration })) }));
+    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, size: draft.engine === 'frames' || draft.engine === 'slides' ? effSize() : draft.size, fps: draft.engine === 'frames' ? draft.fps : 24, title: (!draft.title || draft.title === 'Ma vidéo') ? draft.scenes[0].prompt.trim().slice(0, 50) : draft.title, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs, narration }) => ({ name, prompt, motion, endPrompt, duration, refs, narration })) }));
     server.jobs.unshift(job);
     toast(`« ${job.title} » lancée : ${job.done.length} images. Tu peux quitter la page.`, 'ok');
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -303,17 +332,20 @@ function updateJobCard(j) {
   if (!c) return;
   const r = (k) => $(`[data-r=${k}]`, c);
   const n = (j.done.match(/1/g) || []).length, total = (j.done.match(/[01]/g) || []).length, vframes = j.done.length, remaining = total - n;
+  const unit = j.engine === 'video' ? 'clips' : j.engine === 'slides' ? 'images clés' : 'images';
+  const secs = (j.scenes || []).reduce((a, x) => a + x.duration, 0);
   const label = (providers()[j.provider] || {}).label || j.provider;
   r('title').textContent = j.title;
   const st = r('status'); st.textContent = STATUS[j.status] || j.status; st.className = 'pill ' + j.status;
-  r('meta').textContent = `${label} · ${j.fps} fps · ${j.size} · ${j.scenes.length} scène(s) · ${MODE_LABEL[j.mode]}${j.keyEvery > 1 ? ` · 1 image IA sur ${j.keyEvery}` : ''} · ${(vframes / j.fps).toFixed(1)} s${j.video && j.video.audio ? ' · 🔊 audio' : ''}`;
+  r('meta').textContent = `${label} · ${j.fps} fps · ${j.size} · ${j.scenes.length} scène(s) · ${MODE_LABEL[j.mode]}${j.keyEvery > 1 ? ` · 1 image IA sur ${j.keyEvery}` : ''} · ${(j.engine === 'frames' ? vframes / j.fps : secs).toFixed(1)} s${j.video && j.video.audio ? ' · 🔊 audio' : ''}`;
+  r('meta').textContent = `${{ video: '🎬 Vidéo IA', slides: '🖼 Images animées', frames: '🎞 Image par image' }[j.engine || 'frames']} · ` + r('meta').textContent;
   const sc = r('series'); sc.hidden = !j.series; if (j.series) sc.textContent = `Série « ${j.series.title} » · épisode ${j.series.ep}/${j.series.of}`;
   const pct = j.status === 'assembling' ? (j.assemble || 0) * 100 : (n / total) * 100;
   r('bar').style.width = pct + '%';
   c.classList.toggle('live', j.status === 'running' || j.status === 'assembling');
   const spf = j.spf || estimate().spf;
   r('prog').textContent = j.status === 'assembling' ? `Assemblage de la vidéo… ${Math.round(pct)} %`
-    : `${n}/${total} images · ${Math.round(pct)} %` + (j.status === 'running' && remaining ? ` · reste ~${fmtDur(remaining * spf)}` : '');
+    : `${n}/${total} ${unit} · ${Math.round(pct)} %` + (j.status === 'running' && remaining ? ` · reste ~${fmtDur(remaining * spf)}` : '');
   const note = r('note'); note.textContent = j.error || j.note || ''; note.classList.toggle('err', !!j.error);
   const t = r('toggle');
   t.hidden = j.status === 'done' || j.status === 'assembling';
@@ -323,7 +355,10 @@ function updateJobCard(j) {
   const img = $('img', c), vid = $('video', c), ph = $('.ph', c);
   if (j.video) {
     const v = String(j.video.at);
-    if (c.dataset.video !== v) { c.dataset.video = v; vid.poster = `/api/jobs/${j.id}/frame/${Math.max(0, j.lastFrame)}`; vid.src = `/api/jobs/${j.id}/video?v=${v}`; }
+    if (c.dataset.video !== v) { c.dataset.video = v; if (j.engine !== 'video') vid.poster = `/api/jobs/${j.id}/frame/${Math.max(0, j.lastFrame)}`; vid.src = `/api/jobs/${j.id}/video?v=${v}`; }
+    vid.hidden = false; img.hidden = true; ph.hidden = true;
+  } else if (j.engine === 'video' && j.lastFrame >= 0) {
+    if (c.dataset.frame !== String(j.lastFrame)) { c.dataset.frame = String(j.lastFrame); vid.src = `/api/jobs/${j.id}/clip/${j.lastFrame}`; vid.muted = true; vid.autoplay = true; vid.play().catch(() => {}); }
     vid.hidden = false; img.hidden = true; ph.hidden = true;
   } else if (j.lastFrame >= 0) {
     if (c.dataset.frame !== String(j.lastFrame)) { c.dataset.frame = String(j.lastFrame); img.src = `/api/jobs/${j.id}/frame/${j.lastFrame}`; }
@@ -348,6 +383,11 @@ function renderJobs() {
   renderBadge();
 }
 async function openGallery(j) {
+  if (j.engine === 'video') {
+    return openModal(`<h2>${esc(j.title)} · clips</h2><p class="fine">Clips générés par le modèle vidéo, avant assemblage.</p><div class="gal" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr))">${[...j.done].map((d, i) => d === '1'
+      ? `<a><video src="/api/jobs/${j.id}/clip/${i}" controls muted preload="metadata" style="width:100%;height:100%;object-fit:cover"></video><span>clip ${i + 1}</span></a>`
+      : `<a class="missing"><span>clip ${i + 1}</span>…</a>`).join('')}</div>`);
+  }
   openModal(`<h2>${esc(j.title)} · images</h2><p class="fine">Clique sur une image pour la télécharger.</p><div class="gal">${[...j.done].map((d, i) => d === '1'
     ? `<a href="/api/jobs/${j.id}/frame/${i}?dl=1" download><img src="/api/jobs/${j.id}/frame/${i}" loading="lazy" alt=""><span>${i + 1}</span></a>`
     : `<a class="missing" title="${d === '-' ? 'image interpolée' : 'pas encore générée'}"><span>${i + 1}</span>${d === '-' ? '≈' : '…'}</a>`).join('')}</div>`);
@@ -549,10 +589,11 @@ function provCard(p) {
       <span class="pill ${p.hasKey ? 'done' : 'paused'}">${p.hasKey ? 'Clé ' + esc(p.keyHint) + (p.keyFromEnv ? ' (env)' : '') : 'Sans clé'}</span></div>
     ${meter('Quota cette minute' + (q.cooling ? ` · ralenti après un 429 (${Math.ceil(q.cooling / 1000)} s)` : ''), q.used, q.limit, `${q.used} / ${q.limit}`)}
     ${p.dailyLimit ? meter('Images aujourd\'hui', t.image.ok, p.dailyLimit, `${t.image.ok} / ${p.dailyLimit}`) : `<div class="meter"><div class="row"><span>Images aujourd'hui</span><b>${t.image.ok}</b></div><div class="fine" style="margin:0">Pas de limite quotidienne configurée (Réglages › Avancé).</div></div>`}
+    ${p.videoKind ? (p.videoDailySeconds ? meter('Secondes de vidéo aujourd\'hui', t.video.sec || 0, p.videoDailySeconds, `${t.video.sec || 0} / ${p.videoDailySeconds} s`) : `<div class="meter"><div class="row"><span>Secondes de vidéo aujourd'hui</span><b>${t.video.sec || 0} s</b></div></div>`) : ''}
     <div class="stats">
       <div class="stat"><span>Images</span><b>${t.image.ok}</b>${t.image.err ? `<em>${t.image.err} err.</em>` : ''}</div>
       <div class="stat"><span>Texte (IA)</span><b>${t.chat.ok}</b>${t.chat.err ? `<em>${t.chat.err} err.</em>` : ''}</div>
-      <div class="stat"><span>Voix</span><b>${t.tts.ok}</b>${t.tts.err ? `<em>${t.tts.err} err.</em>` : ''}</div>
+      <div class="stat"><span>${p.videoKind ? 'Voix · Clips' : 'Voix'}</span><b>${t.tts.ok}${p.videoKind ? ' · ' + t.video.ok : ''}</b>${t.tts.err + (t.video.err || 0) ? `<em>${t.tts.err + (t.video.err || 0)} err.</em>` : ''}</div>
     </div>
     <div class="fine" style="margin:0">7 jours : ${p.week.ok} réussis · ${p.week.err} erreurs · latence image ~${lat} · dernier appel ${ago(p.last && p.last.at)}</div>
     ${spark(p.series)}
@@ -566,7 +607,7 @@ function renderUsage() {
   const u = usageData;
   if (!u) return;
   const label = Object.fromEntries([...u.providers, ...u.services].map((x) => [x.id, x.label]));
-  const kind = { image: 'image', chat: 'texte', tts: 'voix', search: 'recherche' };
+  const kind = { image: 'image', chat: 'texte', tts: 'voix', search: 'recherche', video: 'vidéo' };
   $('#usageBody').innerHTML = `
     <div class="kpis">
       <div class="kpi"><span>Requêtes aujourd'hui</span><strong>${u.totals.calls}</strong><small>${u.totals.errors} erreur(s)${u.totals.calls ? ` · ${Math.round((u.totals.errors / u.totals.calls) * 100)} %` : ''}</small></div>
@@ -629,7 +670,7 @@ function renderSettings() {
     <details class="card prov" data-pid="${id}" ${(open.size ? open.has(id) : p.hasKey || id === s.defaultProvider) ? 'open' : ''}>
       <summary><span class="sum-l"><span class="card-title" style="margin:0">${esc(p.label)}</span>
         <span class="pill ${p.hasKey ? 'done' : 'paused'}">${p.hasKey ? 'Clé configurée ' + esc(p.keyHint) + (p.keyFromEnv ? ' (env)' : '') : 'Clé manquante'}</span>
-        ${p.refMode === 'none' ? '<span class="pill">sans références</span>' : ''}</span></summary>
+        ${p.refMode === 'none' ? '<span class="pill">sans références</span>' : ''}${p.videoKind ? '<span class="pill running">vidéo IA</span>' : ''}</span></summary>
       <p class="fine" style="margin:0 0 14px">${esc(p.help || '')}</p>
       <div class="grid">
         ${p.custom ? field(id, 'label', 'Nom', p.label) : ''}
@@ -647,6 +688,10 @@ function renderSettings() {
           ${field(id, 'refField', 'Champ JSON des références', p.refField)}
           <label class="check"><input data-p="${id}" data-k="refArray" type="checkbox" ${p.refArray ? 'checked' : ''}><span>Références sous forme de tableau</span></label>
           <label>Taille envoyée${sel(id, 'sizeMode', p.sizeMode, [['size', 'size: "1024x576"'], ['wh', 'width + height']])}</label>` : ''}
+          ${p.videoKind ? `${field(id, 'videoModel', 'Modèle vidéo', p.videoModel, 'text', 'placeholder="(modèle par défaut)"')}
+          ${field(id, 'videoMaxClip', 'Durée max d\'un clip (s)', p.videoMaxClip, 'number', 'min="2" max="30"')}
+          ${field(id, 'videoRpm', 'Clips vidéo / minute', p.videoRpm, 'number', 'min="1" max="60"')}
+          ${field(id, 'videoDailySeconds', 'Quota vidéo par jour en secondes (0 = aucun)', p.videoDailySeconds, 'number', 'min="0"')}` : ''}
           ${field(id, 'extraBody', 'Paramètres supplémentaires (JSON)', p.extraBody, 'text', 'placeholder=\'{"steps":4}\'')}
         </div>
       </details>
@@ -721,6 +766,8 @@ document.addEventListener('click', async (e) => {
     if (ch.dataset.chip === 'size') draft.size = v;
     if (ch.dataset.chip === 'fps') draft.fps = +v;
     if (ch.dataset.chip === 'res') draft.res = v;
+    if (ch.dataset.chip === 'engine') { if (v === 'video' && !hasVideo(draft.provider)) return toast('Cette IA ne fait pas de vidéo : choisis Agnes ou Pollinations', 'err'); draft.engine = v; draft.engineChosen = true; }
+    if (ch.dataset.chip === 'slide') draft.slideSec = +v;
     if (ch.dataset.chip === 'speed') Object.assign(draft, SPEEDS.find(([id]) => id === v)[2]);
     if (ch.dataset.chip === 'prov') draft.provider = v;
     saveDraft(); return renderStudio();

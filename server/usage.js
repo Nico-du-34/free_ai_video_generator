@@ -22,11 +22,11 @@ const SERVICES = {
 };
 
 /** Enregistre un appel externe. kind : image | chat | tts | search | other */
-function record({ service, kind = 'image', ok, ms = 0, status = 0, msg = '' }) {
+function record({ service, kind = 'image', ok, ms = 0, status = 0, msg = '', sec = 0 }) {
   const t = Date.now();
   const day = (data.days[dayKey(t)] = data.days[dayKey(t)] || {});
   const k = ((day[service] = day[service] || {})[kind] = day[service][kind] || { ok: 0, err: 0, ms: 0, e429: 0 });
-  if (ok) { k.ok++; k.ms += ms; } else { k.err++; if (status === 429) k.e429++; }
+  if (ok) { k.ok++; k.ms += ms; if (sec) k.sec = (k.sec || 0) + sec; } else { k.err++; if (status === 429) k.e429++; }
   const l = (data.last[service] = data.last[service] || {});
   l.at = t;
   if (!ok) l.err = { at: t, status, msg: String(msg).slice(0, 220) };
@@ -38,6 +38,7 @@ function record({ service, kind = 'image', ok, ms = 0, status = 0, msg = '' }) {
 }
 const today = (service, kind = 'image') => ((data.days[dayKey()] || {})[service] || {})[kind] || { ok: 0, err: 0 };
 const imagesToday = (service) => today(service, 'image').ok;
+const videoSecToday = (service) => today(service, 'video').sec || 0;
 
 function sum(o) { return Object.values(o || {}).reduce((a, k) => ({ ok: a.ok + k.ok, err: a.err + k.err, ms: a.ms + k.ms }), { ok: 0, err: 0, ms: 0 }); }
 function lastDays(n) { const out = []; for (let i = n - 1; i >= 0; i--) out.push(dayKey(Date.now() - i * 864e5)); return out; }
@@ -73,7 +74,8 @@ async function overview(quotaOf) {
     return {
       id, label: p.label, type: p.type, hasKey: !!pc.apiKey, keyHint: pc.apiKey ? '…' + pc.apiKey.slice(-4) : '', keyFromEnv: !p.apiKey && !!pc.apiKey,
       rpm: p.rpm, dailyLimit: p.dailyLimit || 0, quota: quotaOf(id), imageModel: p.imageModel, chatModel: p.chatModel,
-      today: { image: td.image || { ok: 0, err: 0 }, chat: td.chat || { ok: 0, err: 0 }, tts: td.tts || { ok: 0, err: 0 } },
+      today: { image: td.image || { ok: 0, err: 0 }, chat: td.chat || { ok: 0, err: 0 }, tts: td.tts || { ok: 0, err: 0 }, video: td.video || { ok: 0, err: 0, sec: 0 } },
+      videoKind: p.videoKind || '', videoDailySeconds: p.videoDailySeconds || 0,
       week, latencyMs: Math.round(store.stats.latency[id] || 0), last: data.last[id] || null, series: series(id), check: data.checks[id] || null,
       dashUrl: p.dashUrl || '', limitsNote: p.limitsNote || '', accountKind: p.account || 'none',
       account: data.accounts[id] || null, live: live[id] ? { at: live[id].at, headers: live[id].headers, parsed: parseLimits(live[id].headers) } : null,
@@ -283,4 +285,4 @@ async function checkService(id) {
 
 function reset() { data.days = {}; data.last = {}; data.events = []; data.accounts = {}; flush(); }
 
-module.exports = { noteHeaders, refreshAccount, record, imagesToday, overview, checkProvider, checkService, reset, flush };
+module.exports = { videoSecToday, noteHeaders, refreshAccount, record, imagesToday, overview, checkProvider, checkService, reset, flush };

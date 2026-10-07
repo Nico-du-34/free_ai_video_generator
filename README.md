@@ -13,6 +13,11 @@ docker compose up -d --build
 
 Sans Docker : Node ≥ 22 + ffmpeg, puis `npm start`.
 
+## Trois types de génération
+- **🎬 Vidéo IA (par défaut quand disponible)** : un vrai modèle vidéo génère des clips avec du vrai mouvement (Agnes `agnes-video-v2.0` via `/v1/videos` + suivi asynchrone, Pollinations `/video/…`). Les clips d'une même scène s'enchaînent (dernière image du clip précédent = image de départ du suivant), puis ffmpeg les assemble, recadre et fige si un clip est trop court. Quota gratuit Agnes : 1 clip/minute et 500 s de vidéo/jour (suivi dans *Usage & IA*).
+- **🖼 Images animées** : peu d'images clés générées par n'importe quelle IA (Together, Cloudflare, Hugging Face…), animées par zoom, panoramique et fondus enchaînés. Rapide, très fluide, mouvement de caméra uniquement.
+- **🎞 Image par image (expérimental)** : une image IA par image vidéo. Peu cohérent, réservé aux essais.
+
 ## Fonctions
 - **Onglet Usage & IA** : par clé enregistrée, quota de la minute en direct (et ralentissement après un 429), images du jour face à une limite quotidienne réglable (Agnes : 4 000 par défaut, bloque proprement une fois atteinte), compteurs images / texte / voix, erreurs, latence, courbe sur 14 jours, dernière erreur ; bouton *Vérifier la clé et le compte* (validité, modèles disponibles à assigner en un clic, solde/profil quand l'API l'expose), services audio, journal des derniers appels, stockage utilisé. **Valeurs réelles du fournisseur** : en-têtes de quota (`x-ratelimit-*`) lus sur chaque réponse, et API de compte quand elle existe : Pollinations (solde en pollen, budget et permissions de la clé, usage par modèle et par jour), Hugging Face (compte, abonnement, fin de période), Cloudflare (token, expiration) ; pour Agnes et les API personnalisées, essai de chemins de solde courants (non documentés). Rafraîchi toutes les 5 min quand l'onglet est ouvert.
 - **Voix et ambiance** (carte *Son* du Studio, bouton *Audio* sur chaque instance) : narration par scène (écrite à la main ou par l'IA, calée sur la durée), voix gratuites (Google Traduction sans clé, voix locale espeak, Cloudflare MeloTTS, ou `/audio/speech` d'une API compatible OpenAI), ambiances générées par ffmpeg (pluie, vent, océan, feu, forêt, ville, espace, nappe musicale), ou recherche sur Freesound / Jamendo (clés gratuites). Mixage avec baisse automatique de l'ambiance quand la voix parle ; on peut changer l'audio après coup sans régénérer les images.
@@ -63,6 +68,7 @@ docker run --rm -v free_ai_video_generator_frame-data:/d -v $PWD:/b alpine tar c
 | `PORT`, `BIND` | Port publié et interface d'écoute de l'hôte |
 | `DOMAIN` | Domaine pour le profil `https` |
 | `DATA_DIR` | Dossier de données (`/data` dans Docker) |
+| `PUBLIC_URL` | URL publique de l'app ; permet l'image de départ des clips Pollinations (URL signée, non devinable) |
 
 ## Notes
 - Les modèles Pollinations et leurs noms évoluent : ajuste « Modèle image / avec références / texte » dans Réglages. Les références y passent par `/images/edits`.

@@ -19,6 +19,7 @@ const jobDir = (id) => path.join(store.dirs.jobs, id);
 const framesDir = (id) => path.join(jobDir(id), 'frames');
 const framePath = (id, i) => path.join(framesDir(id), String(i + 1).padStart(5, '0') + '.png');
 const videoPath = (id) => path.join(jobDir(id), 'video.mp4');
+const clipPath = (id, i) => path.join(jobDir(id), 'clips', 'c_' + String(i + 1).padStart(5, '0') + '.mp4');
 const silentPath = (id) => path.join(jobDir(id), 'video_silent.mp4');
 const audioDir = (id) => path.join(jobDir(id), 'audio');
 const assetPath = (id) => path.join(store.dirs.assets, id + '.jpg');
@@ -44,6 +45,14 @@ const slim = (job) => ({ ...job, log: undefined, logN: job.logSeq || 0 });
 
 /* ---------- Prompt et plan ---------- */
 function framePrompt(job, scene, k, n) {
+  if (job.engine === 'slides') {
+    let t = [job.style, scene.prompt].filter(Boolean).join(', ');
+    if (scene.motion) t += `. Action: ${scene.motion}`;
+    if (scene.endPrompt && n > 1) t += `. The story progresses toward: ${scene.endPrompt} (shot ${k + 1} of ${n})`;
+    else if (n > 1) t += `. Shot ${k + 1} of ${n}, a different camera angle or moment of the same scene`;
+    if (k > 0 && job.mode !== 'none') t += '. Keep exactly the same characters, designs, art style and setting as the reference image.';
+    return t + '. Cinematic composition, sharp focus';
+  }
   const p = n > 1 ? Math.round((k / (n - 1)) * 100) : 0;
   let t = [job.style, scene.prompt].filter(Boolean).join(', ');
   if (scene.motion) t += `. Motion in this shot: ${scene.motion}`;
@@ -52,10 +61,36 @@ function framePrompt(job, scene, k, n) {
   if (k > 0 && job.mode !== 'none') t += '. Keep exactly the same characters, designs, art style, camera and lighting as the reference image, only advance the action by one very small step.';
   return t + ` (frame ${k + 1} of ${n})`;
 }
-const plan = (job) => job.scenes.flatMap((s, si) => { const n = Math.max(1, Math.round(s.duration * job.fps)); return Array.from({ length: n }, (_, k) => ({ si, k, n })); });
+const plan = (job) => job.scenes.flatMap((s, si) => {
+  if (job.engine === 'video' || job.engine === 'slides') {          // un élément = un clip IA ou une image fixe, avec sa durée
+    const unit = job.engine === 'video' ? job.clipSec : job.slideSec;
+    const n = Math.max(1, Math.ceil(s.duration / unit - 1e-9));
+    return Array.from({ length: n }, (_, k) => ({ si, k, n, sec: k < n - 1 ? unit : +(s.duration - unit * (n - 1)).toFixed(3) }));
+  }
+  const n = Math.max(1, Math.round(s.duration * job.fps));
+  return Array.from({ length: n }, (_, k) => ({ si, k, n }));
+});
+const ENGINES = ['video', 'slides', 'frames'];
+const totalSeconds = (job) => job.scenes.reduce((a, s) => a + s.duration, 0);
+/** Résolution demandée aux modèles vidéo (multiples de 32). */
+function videoSize(size) {
+  const [w, h] = size.split('x').map(Number), r = w / h;
+  return r >= 1.6 ? [1152, 640] : r >= 1.2 ? [1024, 768] : r >= 0.9 ? [768, 768] : r >= 0.7 ? [768, 1024] : [640, 1152];
+}
+const evenSize = (size) => size.split('x').map((v) => Math.round(+v / 2) * 2);
 const isKey = (f, ke) => f.k % ke === 0 || f.k === f.n - 1;
 const countGen = (job) => (job.done.match(/[01]/g) || []).length;
 const countDone = (job) => (job.done.match(/1/g) || []).length;
+
+/** URL publique signée d'une image (pour les modèles vidéo qui n'acceptent qu'une URL) ; nécessite PUBLIC_URL. */
+async function pubUrl(jobId, buf, name) {
+  const base = process.env.PUBLIC_URL;
+  if (!base) return null;
+  const dir = path.join(jobDir(jobId), 'pub');
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(path.join(dir, name + '.jpg'), buf);
+  return `${base.replace(/\/$/, '')}/pub/${jobId}/${name}.${store.sign(jobId + '/' + name)}`;
+}
 
 /* ---------- Création ---------- */
 function validRefs(list) {
@@ -70,12 +105,16 @@ function createJob(spec) {
   if (!Array.isArray(spec.scenes) || !spec.scenes.length) throw httpError(400, 'Au moins une scène est requise');
   if (spec.scenes.length > 50) throw httpError(400, '50 scènes maximum');
   const str = (v, n) => String(v == null ? '' : v).slice(0, n);
-  const noRefs = settings.providers[provider].refMode === 'none';
+  const pcfg = settings.providers[provider];
+  const engine = ENGINES.includes(spec.engine) ? spec.engine : 'frames';
+  if (engine === 'video' && !pcfg.videoKind) throw httpError(400, `${pcfg.label} ne propose pas de génération vidéo : choisis Agnes ou Pollinations, ou le type « Images animées »`);
+  const noRefs = pcfg.refMode === 'none' && engine !== 'video';
   const job = {
+    engine, clipSec: clamp(+pcfg.videoMaxClip || 5, 2, 30), slideSec: clamp(+spec.slideSec || 3, 1.5, 10), clips: [],
     id: 'j_' + uid(), title: str(spec.title, 120).trim() || 'Vidéo', provider, createdAt: Date.now(), status: 'paused',
-    fps: clamp(Math.round(+spec.fps) || 12, 12, 60), size,
-    mode: noRefs ? 'none' : MODES.includes(spec.mode) ? spec.mode : 'chain',
-    concurrency: clamp(Math.max(Math.round(+spec.concurrency) || 1, noRefs ? 3 : 1), 1, 6), keyEvery: clamp(Math.round(+spec.keyEvery) || 1, 1, 6),
+    fps: engine === 'video' ? clamp(+pcfg.videoFps || 24, 12, 60) : engine === 'slides' ? clamp(Math.round(+spec.fps) || 24, 12, 60) : clamp(Math.round(+spec.fps) || 12, 12, 60), size,
+    mode: noRefs ? 'none' : engine === 'video' ? (pcfg.videoKind === 'pollinations' && !process.env.PUBLIC_URL ? 'none' : 'chain') : MODES.includes(spec.mode) ? spec.mode : 'chain',
+    concurrency: clamp(Math.max(Math.round(+spec.concurrency) || 1, noRefs ? 3 : 1), 1, 6), keyEvery: engine === 'frames' ? clamp(Math.round(+spec.keyEvery) || 1, 1, 6) : 1,
     style: str(spec.style, 500).trim(),
     enrichAuto: !!spec.enrichAuto, enriched: false, globalRefs: validRefs(spec.globalRefs), audio: audio.normalize(spec.audio),
     series: spec.series && store.ID_RE.test(spec.series.id || '') ? { id: spec.series.id, title: str(spec.series.title, 120), ep: +spec.series.ep || 1, of: +spec.series.of || 1 } : null,
@@ -87,11 +126,15 @@ function createJob(spec) {
     done: '', error: '', note: '', video: null, lastFrame: -1, spf: 0, assemble: 0, log: [], logSeq: 0,
   };
   const pl = plan(job);
-  if (pl.length > 5000) throw httpError(400, `Trop d'images (${pl.length}, max 5000) : réduis la durée ou les images/seconde`);
+  if (pl.length > (engine === 'frames' ? 5000 : 300)) throw httpError(400, engine === 'frames' ? `Trop d'images (${pl.length}, max 5000) : réduis la durée ou les images/seconde` : `Trop d'éléments (${pl.length}, max 300) : réduis la durée`);
   job.done = pl.map((f) => (isKey(f, job.keyEvery) ? '0' : '-')).join('');
   fs.mkdirSync(framesDir(job.id), { recursive: true });
   jobs.set(job.id, job);
-  log(job, 'info', `Instance créée : ${pl.length} images vidéo, ${countGen(job)} à générer via ${settings.providers[provider].label} (${job.size}, ${job.fps} img/s, mode ${job.mode}${job.keyEvery > 1 ? `, 1 image IA sur ${job.keyEvery} + interpolation` : ''})`);
+  log(job, 'info', engine === 'video'
+    ? `Instance créée : ${pl.length} clip(s) vidéo IA de ${job.clipSec} s max (${totalSeconds(job)} s au total) via ${pcfg.label}, sortie ${job.size} à ${job.fps} img/s`
+    : engine === 'slides'
+      ? `Instance créée : ${pl.length} image(s) fixes animées (≈${job.slideSec} s chacune, ${totalSeconds(job)} s au total) via ${pcfg.label} · zoom, panoramique et fondus`
+      : `Instance créée : ${pl.length} images vidéo, ${countGen(job)} à générer via ${pcfg.label} (${job.size}, ${job.fps} img/s, mode ${job.mode}${job.keyEvery > 1 ? `, 1 image IA sur ${job.keyEvery} + interpolation` : ''})`);
   if (noRefs && spec.mode !== 'none') log(job, 'warn', `${settings.providers[provider].label} ne gère pas les images de référence : images indépendantes`);
   persist(job, true);
   start(job);
@@ -163,7 +206,7 @@ class Runner {
     const job = this.job;
     job.status = 'running'; job.error = ''; job.note = '';
     this.lastDone = Date.now();
-    log(job, 'info', `▶ Démarrage (${countDone(job)}/${countGen(job)} images déjà générées)`);
+    log(job, 'info', `▶ Démarrage (${countDone(job)}/${countGen(job)} éléments déjà générés)`);
     persist(job, true);
     if (job.enrichAuto && !job.enriched) await this.enrich();
     if (this.ctl.signal.aborted) return;
@@ -202,7 +245,8 @@ class Runner {
       this.inflight.add(i);
       try { await this.frame(i); } catch (e) {
         if (e.name === 'AbortError' || sig.aborted) return;
-        this.failed = true; this.job.error = `Image ${i + 1} : ${e.message}`;
+        if (e.fatalVideo && this.job.clips[i]) this.job.clips[i].videoId = null;
+        this.failed = true; this.job.error = `${this.job.engine === 'video' ? 'Clip' : 'Image'} ${i + 1} : ${e.message}`;
         return;
       } finally { this.inflight.delete(i); this.notify(); }
     }
@@ -218,7 +262,54 @@ class Runner {
     return this.cache.get(key);
   }
 
+  /** Génère un clip avec un vrai modèle vidéo (asynchrone côté fournisseur). */
+  async clip(i) {
+    const job = this.job, sig = this.ctl.signal, f = this.plan[i], scene = job.scenes[f.si], p = store.providerCfg(job.provider);
+    const [W, H] = videoSize(job.size);
+    let ref = null, refUrl = null;
+    if (job.mode === 'chain' && f.k > 0 && job.done[i - 1] === '1') {
+      try { ref = await this.cached('l' + (i - 1), () => media.lastFrame(clipPath(job.id, i - 1))); } catch (e) { log(job, 'warn', 'Dernière image du clip précédent illisible : ' + e.message); }
+    } else if (f.k === 0) {
+      const id = scene.refs[0] || job.globalRefs[0];
+      if (id) { try { ref = await fsp.readFile(assetPath(id)); } catch { /* référence supprimée */ } }
+    }
+    if (ref && p.videoKind === 'pollinations') { refUrl = await pubUrl(job.id, ref, `r${i}`); if (!refUrl) ref = null; }
+    let prompt = [job.style, scene.prompt].filter(Boolean).join(', ');
+    if (scene.motion) prompt += `. Camera and action: ${scene.motion}`;
+    if (f.k > 0) prompt += '. Continue the same shot seamlessly, same characters, same setting and style.';
+    if (scene.endPrompt && f.k === f.n - 1) prompt += `. The shot ends with: ${scene.endPrompt}`;
+    const st = (job.clips[i] = job.clips[i] || {});
+    log(job, 'dbg', `→ clip ${countDone(job) + 1}/${job.done.length} (${f.sec} s) ${st.videoId ? 'reprise du suivi ' + st.videoId : 'soumis'} · ${ref ? 'image de départ' : 'texte seul'} · ${prompt.slice(0, 140)}`);
+    const t0 = Date.now();
+    let lastSt = '', lastLog = 0;
+    const buf = await retry(async () => {
+      if (!st.videoId) await providers.acquireVideo(job.provider, f.sec, sig);
+      return providers.video(job.provider, {
+        prompt, width: W, height: H, sec: f.sec, fps: job.fps, ref, refUrl, videoId: st.videoId,
+        onId: (id, raw) => { st.videoId = id; persist(job, true); log(job, 'info', `Clip n°${i + 1} accepté par ${p.label} (video_id ${id})`); log(job, 'dbg', 'Réponse : ' + JSON.stringify(raw).slice(0, 300)); },
+        onStatus: (status, sec, raw) => {
+          job.note = `Clip ${countDone(job) + 1}/${job.done.length} : ${status} (${sec} s)`;
+          if (status !== lastSt || Date.now() - lastLog > 60000) { lastSt = status; lastLog = Date.now(); log(job, 'dbg', `Suivi du clip n°${i + 1} : ${status} (${sec} s) ${JSON.stringify(raw).slice(0, 200)}`); }
+        },
+      }, sig);
+    }, sig, (e, n, wait) => { job.note = `Nouvel essai ${n}/4 : ${e.message}`; log(job, 'warn', `Clip n°${i + 1} : ${e.message} — nouvel essai ${n}/4 dans ${(wait / 1000).toFixed(0)} s`); });
+    store.noteLatency(job.provider + ':video', Date.now() - t0);
+    const file = clipPath(job.id, i);
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await fsp.writeFile(file + '.tmp', buf);
+    await fsp.rename(file + '.tmp', file);
+    this.setDone(i);
+    st.videoId = null;
+    job.lastFrame = i; job.note = '';
+    const now = Date.now(), iv = (now - this.lastDone) / 1000;
+    this.lastDone = now;
+    job.spf = job.spf ? job.spf * 0.7 + iv * 0.3 : iv;
+    log(job, 'ok', `✓ clip ${countDone(job)}/${job.done.length} reçu en ${((now - t0) / 1000).toFixed(0)} s (${(buf.length / 1048576).toFixed(1)} Mo)`);
+    persist(job);
+  }
+
   async frame(i) {
+    if (this.job.engine === 'video') return this.clip(i);
     const job = this.job, sig = this.ctl.signal, f = this.plan[i], scene = job.scenes[f.si];
     const refs = [];
     const fromFrame = (k) => this.cached('f' + k, async () => media.toJpeg(await fsp.readFile(framePath(job.id, k)), 640));
@@ -318,22 +409,34 @@ async function assemble(job) {
   const seq = path.join(jobDir(job.id), 'seq');
   const t0 = Date.now();
   try {
-    await fsp.rm(seq, { recursive: true, force: true });
-    await fsp.mkdir(seq, { recursive: true });
-    const total = job.done.length;
-    const idxs = [...job.done].map((c, i) => (c === '-' ? -1 : i)).filter((i) => i >= 0);   // images à placer dans la séquence
-    let last = job.done.indexOf('1');
-    if (last < 0) throw new Error('aucune image générée');
-    let frames = 0;
-    for (let k = 0; k < idxs.length; k++) {   // images manquantes : on répète la précédente
-      if (job.done[idxs[k]] === '1') { last = idxs[k]; frames++; }
-      await fsp.symlink(framePath(job.id, last), path.join(seq, String(k + 1).padStart(5, '0') + '.png'));
-    }
-    const interp = job.keyEvery > 1 && idxs.length < total;
     const out = silentPath(job.id) + '.tmp.mp4';
-    await media.encodeVideo(path.join(seq, '%05d.png'), {
-      inFps: interp ? job.fps * idxs.length / total : job.fps, outFps: job.fps, interp: interp ? INTERP : null,
-    }, out, total, (p) => { job.assemble = p * 0.9; });
+    let frames = 0, interp = false;
+    const [W, H] = evenSize(job.size), pl = plan(job);
+    const onP = (p) => { job.assemble = p * 0.9; };
+    if (job.engine === 'video' || job.engine === 'slides') {
+      const idx = [...job.done].map((c, i) => (c === '1' ? i : -1)).filter((i) => i >= 0);
+      if (!idx.length) throw new Error(job.engine === 'video' ? 'aucun clip généré' : 'aucune image générée');
+      frames = idx.length;
+      const files = idx.map((i) => (job.engine === 'video' ? clipPath(job.id, i) : framePath(job.id, i)));
+      const secs = idx.map((i) => pl[i].sec);
+      if (job.engine === 'video') await media.encodeClips(files, secs, W, H, job.fps, out, onP);
+      else await media.encodeSlides(files, secs, W, H, job.fps, out, onP);
+    } else {
+      await fsp.rm(seq, { recursive: true, force: true });
+      await fsp.mkdir(seq, { recursive: true });
+      const total = job.done.length;
+      const idxs = [...job.done].map((c, i) => (c === '-' ? -1 : i)).filter((i) => i >= 0);   // images à placer dans la séquence
+      let last = job.done.indexOf('1');
+      if (last < 0) throw new Error('aucune image générée');
+      for (let k = 0; k < idxs.length; k++) {   // images manquantes : on répète la précédente
+        if (job.done[idxs[k]] === '1') { last = idxs[k]; frames++; }
+        await fsp.symlink(framePath(job.id, last), path.join(seq, String(k + 1).padStart(5, '0') + '.png'));
+      }
+      interp = job.keyEvery > 1 && idxs.length < total;
+      await media.encodeVideo(path.join(seq, '%05d.png'), {
+        inFps: interp ? job.fps * idxs.length / total : job.fps, outFps: job.fps, interp: interp ? INTERP : null,
+      }, out, total, onP);
+    }
     await fsp.rename(out, silentPath(job.id));
     await finalizeVideo(job);
     const st = await fsp.stat(videoPath(job.id));
@@ -372,4 +475,4 @@ function boot() {
 const list = () => [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt).map(slim);
 const get = (id) => jobs.get(id);
 
-module.exports = { audioDir, remix, boot, list, get, slim, createJob, cloneJob, seriesIdeas, createSeries, logLines, start, pause, assemble, remove, flushAll, framePrompt, plan, framePath, videoPath, assetPath, httpError };
+module.exports = { clipPath, audioDir, remix, boot, list, get, slim, createJob, cloneJob, seriesIdeas, createSeries, logLines, start, pause, assemble, remove, flushAll, framePrompt, plan, framePath, videoPath, assetPath, httpError };

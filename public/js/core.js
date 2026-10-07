@@ -24,7 +24,7 @@ const LS = {
 };
 const newScene = (n = 1) => ({ id: uid(), libId: null, name: 'Scène ' + n, prompt: '', promptOriginal: '', motion: '', endPrompt: '', duration: 3, refs: [], narration: '' });
 const newAudio = () => ({ voice: { engine: 'google', lang: 'fr', speed: 1, volume: 1 }, ambient: { kind: 'none', preset: 'rain', query: '', volume: 0.3 }, duck: true });
-const newDraft = () => ({ audio: newAudio(), title: 'Ma vidéo', provider: '', fps: 12, size: '1024x576', mode: 'chain', concurrency: 2, keyEvery: 1, res: 'std', style: '', enrichAuto: true, simple: true, globalRefs: [], scenes: [newScene()] });
+const newDraft = () => ({ engine: 'slides', engineChosen: false, slideSec: 3, audio: newAudio(), title: 'Ma vidéo', provider: '', fps: 12, size: '1024x576', mode: 'chain', concurrency: 2, keyEvery: 1, res: 'std', style: '', enrichAuto: true, simple: true, globalRefs: [], scenes: [newScene()] });
 let draft = Object.assign(newDraft(), LS.get('draft', {}));
 if (!Array.isArray(draft.scenes) || !draft.scenes.length) draft.scenes = [newScene()];
 draft.scenes.forEach((s) => { if (typeof s.narration !== 'string') s.narration = ''; });

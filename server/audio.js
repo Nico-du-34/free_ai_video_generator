@@ -162,7 +162,7 @@ async function voiceFile(dir, voice, text, signal) {
 /** Prépare les fichiers audio (voix + ambiance) ; idempotent, mis en cache sur disque. */
 async function prepare(job, dir, signal) {
   if (!hasAudio(job)) return null;
-  const total = job.done.length / job.fps;
+  const total = job.scenes.reduce((a, x) => a + x.duration, 0);
   const res = { voices: [], ambient: null };
   if (hasVoice(job)) {
     let t0 = 0;
@@ -183,7 +183,7 @@ async function prepare(job, dir, signal) {
 async function mix(job, dir, silent, outFile, signal) {
   const prep = await prepare(job, dir, signal);
   if (!prep) throw new Error('pas d\'audio à mixer');
-  const T = job.done.length / job.fps;
+  const T = job.scenes.reduce((a, x) => a + x.duration, 0);
   const a = job.audio;
   const args = ['-y', '-i', silent];
   const fc = [];

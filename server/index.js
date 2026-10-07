@@ -69,7 +69,9 @@ async function api(req, res, url) {
   const p = url.pathname, m = req.method;
   let r;
   if (p === '/api/state' && m === 'GET') {
-    return send(res, 200, { jobs: engine.list(), settings: store.publicSettings(), latency: store.stats.latency, time: Date.now() });
+    const ps = store.getSettings().providers;
+    return send(res, 200, { jobs: engine.list(), settings: store.publicSettings(), latency: store.stats.latency, time: Date.now(),
+      usageToday: Object.fromEntries(Object.keys(ps).map((id) => [id, { videoSec: usage.videoSecToday(id), images: usage.imagesToday(id) }])) });
   }
   if (p === '/api/usage' && m === 'GET') {
     const o = await usage.overview(providers.quotaState);
@@ -185,6 +187,11 @@ async function api(req, res, url) {
       if (!(job.done[i] === '1')) return send(res, 404, { error: 'Image non générée' });
       return sendFile(req, res, engine.framePath(job.id, i), 'image/png', { cache: 'public, max-age=31536000, immutable', download: url.searchParams.has('dl') ? `${slug(job.title)}-${String(i + 1).padStart(4, '0')}.png` : undefined });
     }
+    if (action === 'clip' && m === 'GET') {
+      const i = +r[3];
+      if (!(job.done[i] === '1') || job.engine !== 'video') return send(res, 404, { error: 'Clip non généré' });
+      return sendFile(req, res, engine.clipPath(job.id, i), 'video/mp4', { cache: 'public, max-age=31536000, immutable' });
+    }
     if (action === 'video' && (m === 'GET' || m === 'HEAD')) {
       if (!job.video) return send(res, 404, { error: 'Pas encore de vidéo' });
       return sendFile(req, res, engine.videoPath(job.id), 'video/mp4', { download: url.searchParams.has('dl') ? slug(job.title) + '.mp4' : undefined });
@@ -197,6 +204,11 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/healthz') return send(res, 200, { ok: true });
+    let pm;
+    if ((pm = /^\/pub\/([a-z0-9_]+)\/([a-z0-9_]+)\.([a-f0-9]{24})$/i.exec(url.pathname))) {   // image publique signée (accès sans mot de passe, URL non devinable)
+      if (store.sign(pm[1] + '/' + pm[2]) !== pm[3]) return send(res, 404, { error: 'Introuvable' });
+      return await sendFile(req, res, path.join(store.dirs.jobs, pm[1], 'pub', pm[2] + '.jpg'), 'image/jpeg');
+    }
     if (!authorized(req)) { res.writeHead(401, { 'www-authenticate': 'Basic realm="Frame Studio", charset="UTF-8"' }); return res.end('Authentification requise'); }
     if (url.pathname.startsWith('/api/')) return await api(req, res, url);
     let rel = decodeURIComponent(url.pathname);

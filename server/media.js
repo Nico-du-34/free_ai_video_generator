@@ -65,4 +65,51 @@ async function toMp3(buf) {
   return out;
 }
 
-module.exports = { ffmpeg, toPng, toJpeg, encodeVideo, duration, toMp3 };
+/** Dernière image d'un clip (JPEG ≤ 768 px), pour enchaîner le clip suivant. */
+async function lastFrame(file) {
+  const out = await ffmpeg(['-sseof', '-0.2', '-i', file, '-frames:v', '1', '-vf', "scale='if(gt(iw,ih),min(768,iw),-2)':'if(gt(iw,ih),-2,min(768,ih))'", '-pix_fmt', 'yuvj420p', '-q:v', '3', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1']);
+  if (!out.length) throw new Error('image finale introuvable');
+  return out;
+}
+const X264 = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-movflags', '+faststart'];
+function progressLine(total, cb) { return (l) => { const m = /^frame=(\d+)/.exec(l); if (m && cb) cb(Math.min(1, +m[1] / total)); }; }
+
+/** Concatène des clips vidéo IA : recadrés à W×H, cadence fps, figés sur la dernière image s'ils sont trop courts, coupés à `secs`. */
+async function encodeClips(files, secs, W, H, fps, outFile, onProgress) {
+  const args = ['-y'];
+  files.forEach((f) => args.push('-i', f));
+  const parts = files.map((f, i) => `[${i}:v]tpad=stop_mode=clone:stop_duration=8,trim=duration=${secs[i].toFixed(3)},setpts=PTS-STARTPTS,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},setsar=1,format=yuv420p[v${i}]`);
+  parts.push(`${files.map((f, i) => `[v${i}]`).join('')}concat=n=${files.length}:v=1:a=0[out]`);
+  const total = Math.max(1, Math.round(secs.reduce((a, b) => a + b, 0) * fps));
+  await ffmpeg([...args, '-filter_complex', parts.join(';'), '-map', '[out]', ...X264, '-progress', 'pipe:1', outFile], { onLine: progressLine(total, onProgress) });
+}
+
+/** Images fixes → vidéo : mouvements de caméra (zoom / panoramique) + fondus enchaînés. */
+async function encodeSlides(files, secs, W, H, fps, outFile, onProgress) {
+  const n = files.length;
+  const T = Math.min(0.6, Math.max(0.1, Math.min(...secs) / 2));
+  const FX = [
+    (N) => ({ z: `1+0.18*on/${N}`, x: 'iw/2-(iw/zoom/2)', y: 'ih/2-(ih/zoom/2)' }),
+    (N) => ({ z: `1.18-0.18*on/${N}`, x: 'iw/2-(iw/zoom/2)', y: 'ih/2-(ih/zoom/2)' }),
+    (N) => ({ z: '1.15', x: `(iw-iw/zoom)*on/${N}`, y: 'ih/2-(ih/zoom/2)' }),
+    (N) => ({ z: '1.15', x: `(iw-iw/zoom)*(1-on/${N})`, y: 'ih/2-(ih/zoom/2)' }),
+    (N) => ({ z: '1.15', x: 'iw/2-(iw/zoom/2)', y: `(ih-ih/zoom)*(1-on/${N})` }),
+  ];
+  const args = ['-y'];
+  files.forEach((f) => args.push('-i', f));
+  const parts = files.map((f, i) => {
+    const N = Math.max(2, Math.round((secs[i] + (i === n - 1 ? 0 : T)) * fps));
+    const fx = FX[i % FX.length](N);
+    return `[${i}:v]scale=${2 * W}:${2 * H}:force_original_aspect_ratio=increase,crop=${2 * W}:${2 * H},zoompan=z='${fx.z}':x='${fx.x}':y='${fx.y}':d=${N}:s=${W}x${H}:fps=${fps},setsar=1,format=yuv420p[s${i}]`;
+  });
+  let cur = 's0', acc = 0;
+  for (let i = 1; i < n; i++) {
+    acc += secs[i - 1];
+    parts.push(`[${cur}][s${i}]xfade=transition=${i % 2 ? 'fade' : 'dissolve'}:duration=${T.toFixed(3)}:offset=${acc.toFixed(3)}[x${i}]`);
+    cur = 'x' + i;
+  }
+  const total = Math.max(1, Math.round(secs.reduce((a, b) => a + b, 0) * fps));
+  await ffmpeg([...args, '-filter_complex', parts.join(';'), '-map', `[${cur}]`, ...X264, '-progress', 'pipe:1', outFile], { onLine: progressLine(total, onProgress) });
+}
+
+module.exports = { lastFrame, encodeClips, encodeSlides, ffmpeg, toPng, toJpeg, encodeVideo, duration, toMp3 };
