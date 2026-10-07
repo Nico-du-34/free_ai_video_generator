@@ -3,128 +3,141 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>Frame Studio – vidéo IA image par image</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E🎞️%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236366f1'/%3E%3Cpath d='M9 9h14v14H9z' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='M13 9v14M19 9v14' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header class="top">
-  <h1>🎞️ Frame Studio</h1>
-  <nav id="tabs">
-    <button data-tab="studio" class="active">Studio</button>
-    <button data-tab="jobs">Instances <span id="jobsBadge" class="badge" hidden>0</span></button>
-    <button data-tab="library">Bibliothèque</button>
-    <button data-tab="settings">Réglages</button>
-  </nav>
-  <span id="keyState" class="muted"></span>
-</header>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M7 3v18M17 3v18M2 8h5M2 12h5M2 16h5M17 8h5M17 12h5M17 16h5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z"/><path d="m2 12 10 5 10-5"/><path d="m2 17 10 5 10-5"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5V22h16v-5"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h8M18 6h2M4 12h2M12 12h8M4 18h10M20 18h0"/><circle cx="15" cy="6" r="2.5"/><circle cx="9" cy="12" r="2.5"/><circle cx="17" cy="18" r="2.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m7 4 13 8-13 8z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 21h16"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 3v4M17 5h4"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+    <symbol id="i-clapper" viewBox="0 0 24 24"><path d="M4 11h16v10H4zM4 11l-1-5 17-3 1 5"/><path d="m8 7 2 3M13 6l2 3"/></symbol>
+  </defs>
+</svg>
 
-<main>
-  <!-- STUDIO -->
-  <section id="tab-studio" class="tab active">
-    <div class="studio">
-      <div class="col-main">
-        <div class="card">
-          <h2>Vidéo</h2>
-          <div class="grid">
-            <label class="wide">Titre<input data-d="title" type="text"></label>
-            <label>Images / seconde<input data-d="fps" type="number" min="12" max="60" step="1"><small>minimum 12</small></label>
-            <label>Taille des images
-              <select data-d="size">
-                <option value="1024x576">1024×576 (16:9)</option>
-                <option value="576x1024">576×1024 (9:16)</option>
-                <option value="1024x1024">1024×1024 (1:1)</option>
-                <option value="1024x768">1024×768 (4:3)</option>
-                <option value="768x1024">768×1024 (3:4)</option>
-              </select>
-            </label>
-            <label>Continuité entre images
-              <select data-d="mode">
-                <option value="chain">Chaînée (image précédente en référence) – la plus fluide</option>
-                <option value="anchor">Ancrée (1ʳᵉ image de la scène) – parallélisable</option>
-                <option value="none">Aucune (indépendantes)</option>
-              </select>
-            </label>
-            <label>Images en parallèle (instance)<input data-d="concurrency" type="number" min="1" max="6"><small>ignoré en mode chaîné</small></label>
-            <label class="wide">Style global (ajouté à chaque prompt)<input data-d="style" type="text" placeholder="ex : cinematic, soft light, 35mm film"></label>
-            <label class="check wide"><input data-d="enrichAuto" type="checkbox"> Enrichir automatiquement les prompts au lancement (optionnel)</label>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="logo"><svg class="i"><use href="#i-film"/></svg></span><span>Frame Studio</span></div>
+    <nav id="tabs">
+      <button data-tab="studio" class="active"><svg class="i"><use href="#i-film"/></svg><span>Studio</span></button>
+      <button data-tab="jobs"><svg class="i"><use href="#i-layers"/></svg><span>Instances</span><b id="jobsBadge" class="count" hidden>0</b></button>
+      <button data-tab="library"><svg class="i"><use href="#i-book"/></svg><span>Bibliothèque</span></button>
+      <button data-tab="settings"><svg class="i"><use href="#i-sliders"/></svg><span>Réglages</span></button>
+    </nav>
+    <div class="side-foot"><span class="dot" id="connDot"></span><span id="connText">Connexion…</span></div>
+  </aside>
+
+  <main>
+    <div id="banner" class="banner" hidden></div>
+
+    <!-- STUDIO -->
+    <section id="tab-studio" class="tab active">
+      <header class="page-head"><div><h1>Studio</h1><p>Compose ton storyboard, estime le temps, puis lance — la génération continue même si tu fermes l'onglet.</p></div></header>
+      <div class="studio">
+        <div class="col-main">
+          <div class="card">
+            <div class="card-title">Vidéo</div>
+            <div class="grid">
+              <label class="wide">Titre<input data-d="title" type="text" maxlength="120"></label>
+              <label>Fournisseur d'IA
+                <select data-d="provider"></select>
+                <small id="providerHint"></small>
+              </label>
+              <label>Images par seconde<input data-d="fps" type="number" min="12" max="60" step="1"><small>minimum 12</small></label>
+              <label>Format des images
+                <select data-d="size">
+                  <option value="1024x576">1024×576 · 16:9</option>
+                  <option value="576x1024">576×1024 · 9:16</option>
+                  <option value="1024x1024">1024×1024 · 1:1</option>
+                  <option value="1024x768">1024×768 · 4:3</option>
+                  <option value="768x1024">768×1024 · 3:4</option>
+                </select>
+              </label>
+              <label>Continuité
+                <select data-d="mode">
+                  <option value="chain">Chaînée — la plus fluide</option>
+                  <option value="anchor">Ancrée — parallélisable</option>
+                  <option value="none">Indépendante</option>
+                </select>
+                <small id="modeHint"></small>
+              </label>
+              <label>Images en parallèle<input data-d="concurrency" type="number" min="1" max="6"><small>hors mode chaîné</small></label>
+              <label class="wide">Style global <span class="opt">ajouté à chaque prompt</span><input data-d="style" type="text" placeholder="ex : cinematic, soft light, 35mm film"></label>
+              <label class="check wide"><input data-d="enrichAuto" type="checkbox"><span>Enrichir automatiquement les prompts au lancement <span class="opt">optionnel</span></span></label>
+            </div>
+            <div class="sub-title">Images de référence globales <span class="opt">appliquées à toutes les scènes</span></div>
+            <div id="globalRefs"></div>
           </div>
-          <h3>Images de référence globales <small>(appliquées à toutes les scènes)</small></h3>
-          <div id="globalRefs"></div>
+
+          <div class="section-head">
+            <h2>Storyboard</h2>
+            <div class="actions">
+              <select id="libPick" class="compact"><option value="">Ajouter depuis la bibliothèque…</option></select>
+              <button class="btn" data-act="addScene"><svg class="i"><use href="#i-plus"/></svg>Scène</button>
+            </div>
+          </div>
+          <div id="scenes"></div>
         </div>
 
-        <div class="row-between">
-          <h2>Storyboard</h2>
-          <div class="actions">
-            <select id="libPick"><option value="">📚 Ajouter depuis la bibliothèque…</option></select>
-            <button class="btn" data-act="addScene">＋ Scène</button>
+        <aside class="col-side">
+          <div class="card sticky">
+            <div class="card-title">Estimation</div>
+            <div id="estimate"></div>
+            <div class="actions col">
+              <button class="btn primary lg" data-act="launch"><svg class="i"><use href="#i-zap"/></svg>Lancer la génération</button>
+              <button class="btn" data-act="preview"><svg class="i"><use href="#i-eye"/></svg>Aperçu · 1 image test</button>
+            </div>
+            <p class="fine">Chaque lancement crée une instance indépendante, exécutée sur le serveur : tu peux en lancer plusieurs et quitter la page.</p>
           </div>
-        </div>
-        <div id="scenes"></div>
+        </aside>
       </div>
+    </section>
 
-      <aside class="col-side">
-        <div class="card sticky">
-          <h2>Estimation</h2>
-          <div id="estimate"></div>
-          <div class="actions col">
-            <button class="btn" data-act="preview">🔍 Aperçu (1 image test)</button>
-            <button class="btn primary" data-act="launch">🚀 Lancer la génération</button>
-            <small class="muted">Chaque lancement crée une nouvelle instance indépendante : tu peux en lancer plusieurs en parallèle.</small>
-          </div>
-        </div>
-      </aside>
-    </div>
-  </section>
+    <!-- INSTANCES -->
+    <section id="tab-jobs" class="tab">
+      <header class="page-head"><div><h1>Instances</h1><p id="jobsSummary">—</p></div></header>
+      <div id="jobList" class="jobs"></div>
+      <div id="jobsEmpty" class="empty-state"><svg class="i xl"><use href="#i-layers"/></svg><h3>Aucune instance</h3><p>Lance une génération depuis le Studio, elle apparaîtra ici.</p><button class="btn primary" data-go="studio">Aller au Studio</button></div>
+    </section>
 
-  <!-- INSTANCES -->
-  <section id="tab-jobs" class="tab">
-    <div class="row-between"><h2>Instances de génération</h2><span class="muted" id="jobsSummary"></span></div>
-    <div id="jobList" class="jobs"></div>
-    <p id="jobsEmpty" class="muted">Aucune instance. Lance une génération depuis le Studio.</p>
-  </section>
+    <!-- BIBLIOTHEQUE -->
+    <section id="tab-library" class="tab">
+      <header class="page-head"><div><h1>Bibliothèque</h1><p>Tes scènes réutilisables, stockées dans ce navigateur.</p></div></header>
+      <div id="libList" class="libgrid"></div>
+      <div id="libEmpty" class="empty-state"><svg class="i xl"><use href="#i-book"/></svg><h3>Bibliothèque vide</h3><p>Sauvegarde une scène avec l'icône disquette dans le Studio.</p></div>
+    </section>
 
-  <!-- BIBLIOTHEQUE -->
-  <section id="tab-library" class="tab">
-    <div class="row-between"><h2>Bibliothèque de scènes</h2></div>
-    <div id="libList" class="libgrid"></div>
-    <p id="libEmpty" class="muted">Vide. Utilise « 💾 » sur une scène du Studio pour la sauvegarder.</p>
-  </section>
+    <!-- REGLAGES -->
+    <section id="tab-settings" class="tab">
+      <header class="page-head"><div><h1>Réglages</h1><p>Les clés sont enregistrées sur le serveur (nécessaire pour générer en arrière-plan) et ne sont jamais renvoyées au navigateur.</p></div></header>
+      <div id="settingsBody"></div>
+    </section>
+  </main>
+</div>
 
-  <!-- REGLAGES -->
-  <section id="tab-settings" class="tab">
-    <div class="card narrow">
-      <h2>Clé API Agnes (gratuite)</h2>
-      <p class="muted">Crée un compte gratuit sur <a href="https://platform.agnes-ai.com" target="_blank" rel="noopener">platform.agnes-ai.com</a>, génère une clé, colle-la ici. Elle est stockée uniquement dans le localStorage de ce navigateur.</p>
-      <div class="grid">
-        <label class="wide">Clé API<input data-s="apiKey" type="password" autocomplete="off" placeholder="sk-…"></label>
-        <label class="wide">URL de base de l'API<input data-s="baseUrl" type="text"></label>
-        <label class="check wide"><input data-s="useProxy" type="checkbox"> Passer par le proxy local (<code>npm start</code>) – recommandé, évite les erreurs CORS</label>
-        <label>Modèle image<input data-s="imageModel" type="text"></label>
-        <label>Modèle texte (enrichissement)<input data-s="chatModel" type="text"></label>
-        <label>Quota : images / minute<input data-s="rpm" type="number" min="1" max="120"><small>gratuit 1K : 20/min – partagé entre toutes les instances</small></label>
-        <label>Images de référence max / requête<input data-s="maxRefs" type="number" min="1" max="10"></label>
-        <label>Champ JSON des références<input data-s="refField" type="text"></label>
-        <label class="check"><input data-s="refArray" type="checkbox"> Envoyer sous forme de tableau</label>
-        <label>Format vidéo
-          <select data-s="videoFormat"><option value="webm">WebM (le plus fiable)</option><option value="mp4">MP4 (si le navigateur le permet)</option></select>
-        </label>
-        <label class="wide">Consigne d'enrichissement des prompts<textarea data-s="enhancePrompt" rows="4"></textarea></label>
-      </div>
-      <div class="actions">
-        <button class="btn" data-act="testKey">Tester la clé</button>
-        <button class="btn danger" data-act="wipe">Tout effacer (données locales)</button>
-      </div>
-    </div>
-  </section>
-</main>
-
-<div id="modal" hidden><div class="modal-box"><button class="x" data-act="closeModal">✕</button><div id="modalBody"></div></div></div>
+<div id="modal" hidden><div class="modal-box"><button class="icon-btn x" data-act="closeModal" aria-label="Fermer"><svg class="i"><use href="#i-x"/></svg></button><div id="modalBody"></div></div></div>
 <div id="toasts"></div>
-
-<script src="js/storage.js"></script>
-<script src="js/api.js"></script>
-<script src="js/engine.js"></script>
+<script src="js/core.js"></script>
 <script src="js/ui.js"></script>
 </body>
 </html>

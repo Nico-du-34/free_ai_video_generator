@@ -1,0 +1,10 @@
+# Reverse proxy HTTPS automatique (Let's Encrypt) — utilisé par : docker compose --profile https up -d
+{$DOMAIN} {
+	encode gzip
+	request_body {
+		max_size 20MB
+	}
+	reverse_proxy app:8080 {
+		flush_interval -1
+	}
+}

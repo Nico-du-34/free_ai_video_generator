@@ -1,5 +1,13 @@
 'use strict';
 const STATUS = { running: 'En cours', paused: 'En pause', assembling: 'Assemblage', done: 'Terminée', error: 'Erreur' };
+const MODE_LABEL = { chain: 'chaînée', anchor: 'ancrée', none: 'indépendantes' };
+const MODE_HINT = {
+  chain: 'Chaque image part de la précédente : fluide, mais séquentiel.',
+  anchor: 'Chaque image part de la 1ʳᵉ de la scène : plusieurs images en parallèle.',
+  none: 'Aucune référence entre images : rapide mais peu cohérent.',
+};
+let server = { jobs: [], settings: null, latency: {} };
+let connected = null;
 
 /* ---------- Onglets ---------- */
 function showTab(name) {
@@ -7,32 +15,28 @@ function showTab(name) {
   $$('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   if (name === 'library') renderLibrary();
   if (name === 'jobs') renderJobs();
+  if (name === 'settings') renderSettings();
   history.replaceState(null, '', '#' + name);
+  window.scrollTo(0, 0);
 }
 $('#tabs').addEventListener('click', (e) => { const b = e.target.closest('button[data-tab]'); if (b) showTab(b.dataset.tab); });
 
-/* ---------- Références (images) ---------- */
+/* ---------- Références ---------- */
 function refsHtml(ids, scope) {
   return `<div class="refs" data-scope="${scope}">` +
-    ids.map((id) => `<div class="th"><img data-asset="${id}" alt=""><button data-act="rmref" data-scope="${scope}" data-id="${id}" title="Retirer">×</button></div>`).join('') +
-    `<label class="add">＋ image<input type="file" accept="image/*" multiple hidden data-scope="${scope}"></label>` +
-    (ids.length ? '' : '<span class="hint">Références de personnage, décor, style… (optionnel)</span>') + '</div>';
-}
-async function hydrate(root) {
-  for (const img of $$('img[data-asset]', root)) {
-    const u = await Assets.url(img.dataset.asset);
-    if (u) img.src = u;
-  }
+    ids.map((id) => `<div class="th"><img src="/api/assets/${id}" alt="" loading="lazy"><button class="rm" data-act="rmref" data-scope="${scope}" data-id="${id}" title="Retirer" aria-label="Retirer">${ico('x')}</button></div>`).join('') +
+    `<label class="add" title="Ajouter des images">${ico('plus')}<span>Image</span><input type="file" accept="image/*" multiple hidden data-scope="${scope}"></label>` +
+    (ids.length ? '' : '<span class="hint">Glisse des images ici : personnage, décor, style… (optionnel)</span>') + '</div>';
 }
 const refList = (scope) => (scope === 'global' ? draft.globalRefs : draft.scenes[+scope].refs);
 async function addRefs(scope, files) {
   const list = refList(scope);
+  let failed = 0;
   for (const f of files) {
     if (!f.type.startsWith('image/')) continue;
-    try { list.push(await Assets.add(f)); } catch (e) { toast('Image illisible : ' + f.name, 'err'); }
+    try { list.push((await api('POST', '/api/assets', f, true)).id); } catch (e) { failed++; toast(`${f.name} : ${e.message}`, 'err'); }
   }
-  saveDraft();
-  renderStudio();
+  if (failed < files.length) { saveDraft(); renderStudio(); }
 }
 document.addEventListener('change', (e) => {
   const el = e.target;
@@ -47,80 +51,86 @@ document.addEventListener('change', (e) => {
 }));
 
 /* ---------- Studio ---------- */
-function sceneFrames(s) { return Math.max(1, Math.round((+s.duration || 0) * draft.fps)); }
+const providers = () => (server.settings ? server.settings.providers : {});
+function ensureProvider() {
+  const ps = providers();
+  if (!ps[draft.provider]) draft.provider = (server.settings && server.settings.defaultProvider) || Object.keys(ps)[0] || '';
+}
+const sceneFrames = (s) => Math.max(1, Math.round((+s.duration || 0) * draft.fps));
 
 function renderStudio() {
-  $$('[data-d]').forEach((el) => {
-    const v = draft[el.dataset.d];
-    if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
-  });
+  ensureProvider();
+  const sel = $('[data-d=provider]');
+  sel.innerHTML = Object.entries(providers()).map(([id, p]) => `<option value="${id}">${esc(p.label)}${p.hasKey ? '' : ' (clé manquante)'}</option>`).join('');
+  $$('[data-d]').forEach((el) => { const v = draft[el.dataset.d]; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; });
   $('[data-d=concurrency]').disabled = draft.mode === 'chain';
+  $('#modeHint').textContent = MODE_HINT[draft.mode];
   $('#globalRefs').innerHTML = refsHtml(draft.globalRefs, 'global');
   $('#scenes').innerHTML = draft.scenes.map((s, i) => `
     <div class="scene" data-i="${i}">
       <div class="scene-head">
-        <span class="n">#${i + 1}</span>
-        <input type="text" data-f="name" value="${esc(s.name)}" placeholder="Nom de la scène">
-        <span class="n" data-frames>${sceneFrames(s)} images</span>
-        <button class="btn sm" data-act="sceneUp" title="Monter">↑</button>
-        <button class="btn sm" data-act="sceneDown" title="Descendre">↓</button>
-        <button class="btn sm" data-act="sceneDup" title="Dupliquer">⧉</button>
-        <button class="btn sm" data-act="sceneSave" title="Sauver dans la bibliothèque">💾</button>
-        <button class="btn sm danger" data-act="sceneDel" title="Supprimer">🗑</button>
+        <span class="num">${i + 1}</span>
+        <input class="title-input" type="text" data-f="name" value="${esc(s.name)}" placeholder="Nom de la scène" aria-label="Nom de la scène">
+        <span class="chip" data-frames>${sceneFrames(s)} images</span>
+        <div class="tools">
+          <button class="icon-btn" data-act="sceneUp" title="Monter">${ico('up')}</button>
+          <button class="icon-btn" data-act="sceneDown" title="Descendre">${ico('down')}</button>
+          <button class="icon-btn" data-act="sceneDup" title="Dupliquer">${ico('copy')}</button>
+          <button class="icon-btn" data-act="sceneSave" title="Sauvegarder dans la bibliothèque">${ico('save')}</button>
+          <button class="icon-btn danger" data-act="sceneDel" title="Supprimer">${ico('trash')}</button>
+        </div>
       </div>
-      <label>Prompt de la scène
+      <label>Prompt
         <textarea data-f="prompt" rows="3" placeholder="Décris ce qu'on voit : sujet, décor, ambiance…">${esc(s.prompt)}</textarea>
       </label>
-      <div class="actions" style="margin-top:6px">
-        <button class="btn sm" data-act="enhance">✨ Enrichir le prompt</button>
-        ${s.promptOriginal ? '<button class="btn sm" data-act="unenhance">↩ Prompt d\'origine</button>' : ''}
+      <div class="actions tight">
+        <button class="btn sm" data-act="enhance">${ico('sparkles')}Enrichir le prompt</button>
+        ${s.promptOriginal ? `<button class="btn sm ghost" data-act="unenhance">${ico('undo')}Prompt d'origine</button>` : ''}
       </div>
-      <div class="two">
-        <label>Mouvement / action (optionnel)<input type="text" data-f="motion" value="${esc(s.motion)}" placeholder="ex : la caméra avance lentement"></label>
-        <label>État final (optionnel)<input type="text" data-f="endPrompt" value="${esc(s.endPrompt)}" placeholder="ex : le soleil se couche"></label>
+      <div class="three">
+        <label>Mouvement / action <span class="opt">optionnel</span><input type="text" data-f="motion" value="${esc(s.motion)}" placeholder="ex : la caméra avance lentement"></label>
+        <label>État final <span class="opt">optionnel</span><input type="text" data-f="endPrompt" value="${esc(s.endPrompt)}" placeholder="ex : le soleil se couche"></label>
         <label>Durée (s)<input type="number" data-f="duration" min="0.5" max="60" step="0.5" value="${s.duration}"></label>
       </div>
       ${refsHtml(s.refs, i)}
     </div>`).join('');
-  hydrate(document);
-  const sel = $('#libPick');
-  sel.innerHTML = '<option value="">📚 Ajouter depuis la bibliothèque…</option>' + library.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+  $('#libPick').innerHTML = '<option value="">Ajouter depuis la bibliothèque…</option>' + library.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+  renderProviderHint();
   renderEstimate();
+}
+function renderProviderHint() {
+  const p = providers()[draft.provider];
+  const h = $('#providerHint');
+  h.innerHTML = p && !p.hasKey ? `<a href="#settings" data-go="settings" class="warn-link">Ajouter la clé ${esc(p.label)}</a>` : '';
 }
 
 function estimate() {
   const frames = draft.scenes.reduce((a, s) => a + sceneFrames(s), 0);
   const videoSec = frames / draft.fps;
-  const lat = (stats.latency || 8000) / 1000;
+  const p = providers()[draft.provider] || { rpm: 10 };
+  const lat = ((server.latency || {})[draft.provider] || 8000) / 1000;
   const conc = draft.mode === 'chain' ? 1 : clamp(draft.concurrency, 1, 6);
-  const running = jobs.filter((j) => j.status === 'running').length;
-  const quotaSpf = 60 / (settings.rpm / (running + 1));
+  const running = server.jobs.filter((j) => j.status === 'running' && j.provider === draft.provider).length;
+  const quotaSpf = 60 / (p.rpm / (running + 1));
   const latSpf = lat / conc;
   const spf = Math.max(quotaSpf, latSpf);
-  return {
-    frames, videoSec, spf, lat, running, measured: !!stats.latency,
-    gen: frames * spf, total: frames * spf + videoSec + 3,
-    calls: frames + (draft.enrichAuto ? draft.scenes.length : 0), quotaBound: quotaSpf >= latSpf,
-  };
+  return { frames, videoSec, spf, lat, running, rpm: p.rpm, measured: !!(server.latency || {})[draft.provider], gen: frames * spf, total: frames * spf + 5 + frames / 120, calls: frames + (draft.enrichAuto ? draft.scenes.length : 0), quotaBound: quotaSpf >= latSpf };
 }
 function renderEstimate() {
   const e = estimate();
   $('#estimate').innerHTML = `
+    <div class="total"><span>Temps total estimé</span><strong>~${fmtDur(e.total)}</strong></div>
     <dl class="est">
       <dt>Images à générer</dt><dd>${e.frames}</dd>
       <dt>Durée de la vidéo</dt><dd>${e.videoSec.toFixed(1)} s</dd>
       <dt>Appels API</dt><dd>${e.calls}</dd>
-      <dt>Temps / image</dt><dd>~${e.spf.toFixed(1)} s</dd>
+      <dt>Temps par image</dt><dd>~${e.spf.toFixed(1)} s</dd>
       <dt>Génération</dt><dd>~${fmtDur(e.gen)}</dd>
-      <dt>Assemblage</dt><dd>~${fmtDur(e.videoSec + 3)}</dd>
-      <dt>Total estimé</dt><dd class="big">~${fmtDur(e.total)}</dd>
     </dl>
-    <div class="muted" style="margin-top:8px;font-size:12px">
-      ${e.measured ? `Latence mesurée : ${e.lat.toFixed(1)} s/image.` : 'Latence par défaut (8 s) – lance un aperçu pour mesurer.'}
-      Limité par : ${e.quotaBound ? `le quota (${settings.rpm} img/min${e.running ? `, partagé avec ${e.running} instance(s)` : ''})` : 'la latence de l\'API'}.
-    </div>
-    ${e.frames > 1500 ? '<div class="warn">⚠ Plus de 1 500 images : la limite gratuite est de 4 000 images / jour.</div>' : ''}
-    ${draft.mode === 'chain' && e.frames > 120 ? '<div class="warn">Mode chaîné = séquentiel. Passe en « ancrée » + parallèle pour aller plus vite.</div>' : ''}`;
+    <p class="fine">${e.measured ? `Latence mesurée : ${e.lat.toFixed(1)} s/image.` : 'Latence par défaut (8 s) — lance un aperçu pour la mesurer.'}
+      Limité par ${e.quotaBound ? `le quota (${e.rpm} img/min${e.running ? `, partagé avec ${e.running} instance(s)` : ''})` : 'la latence de l\'API'}.</p>
+    ${e.frames > 1500 ? '<p class="note warn">Plus de 1 500 images : attention aux limites quotidiennes du fournisseur.</p>' : ''}
+    ${draft.mode === 'chain' && e.frames > 120 ? '<p class="note warn">Mode chaîné = séquentiel. « Ancrée » + parallèle va plus vite.</p>' : ''}`;
   $$('.scene').forEach((el) => { $('[data-frames]', el).textContent = sceneFrames(draft.scenes[+el.dataset.i]) + ' images'; });
 }
 
@@ -129,15 +139,12 @@ document.addEventListener('input', (e) => {
   if (el.dataset.d) {
     const k = el.dataset.d;
     draft[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value;
-    if (k === 'mode') $('[data-d=concurrency]').disabled = draft.mode === 'chain';
+    if (k === 'mode') { $('[data-d=concurrency]').disabled = draft.mode === 'chain'; $('#modeHint').textContent = MODE_HINT[draft.mode]; }
+    if (k === 'provider') renderProviderHint();
     saveDraft(); if (k !== 'title') renderEstimate();
   } else if (el.dataset.f) {
-    const s = draft.scenes[+el.closest('.scene').dataset.i];
-    s[el.dataset.f] = el.type === 'number' ? +el.value : el.value;
+    draft.scenes[+el.closest('.scene').dataset.i][el.dataset.f] = el.type === 'number' ? +el.value : el.value;
     saveDraft(); renderEstimate();
-  } else if (el.dataset.s) {
-    settings[el.dataset.s] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value;
-    saveSettings(); renderKeyState();
   }
 });
 document.addEventListener('change', (e) => {
@@ -152,256 +159,295 @@ document.addEventListener('change', (e) => {
   }
 });
 
+async function withBusy(btn, label, fn) {
+  const html = btn.innerHTML;
+  btn.disabled = true; if (label) btn.textContent = label;
+  try { return await fn(); } finally { btn.disabled = false; btn.innerHTML = html; }
+}
 async function enhanceScene(i, btn) {
   const s = draft.scenes[i];
   if (!s.prompt.trim()) return toast('Écris d\'abord un prompt', 'err');
-  btn.disabled = true; btn.textContent = '✨ …';
   try {
-    const out = await Api.enhance(s.prompt);
+    const { text } = await withBusy(btn, 'Enrichissement…', () => api('POST', '/api/enhance', { provider: draft.provider, text: s.prompt }));
     if (!s.promptOriginal) s.promptOriginal = s.prompt;
-    s.prompt = out; saveDraft(); renderStudio();
-  } catch (e) { toast('Enrichissement : ' + e.message, 'err'); btn.disabled = false; btn.textContent = '✨ Enrichir le prompt'; }
+    s.prompt = text; saveDraft(); renderStudio();
+  } catch (e) { toast('Enrichissement : ' + e.message, 'err'); }
 }
-
 async function previewFrame(btn) {
   const s = draft.scenes[0];
   if (!s.prompt.trim()) return toast('Écris un prompt dans la 1ʳᵉ scène', 'err');
-  btn.disabled = true; btn.textContent = 'Génération…';
   try {
-    const refs = [];
-    for (const id of [...s.refs, ...draft.globalRefs]) refs.push(await Assets.dataUrl(id));
-    const job = { style: draft.style, mode: 'none' };
-    const prompt = Engine.framePrompt(job, s, 0, sceneFrames(s));
-    const t0 = Date.now();
-    const blob = await Api.retry(async () => {
-      await Limiter.acquire();
-      return Api.image({ prompt, size: draft.size, refs: refs.filter(Boolean).slice(0, settings.maxRefs) });
-    });
-    noteLatency(Date.now() - t0);
-    const url = URL.createObjectURL(blob);
-    openModal(`<h2>Aperçu – première image</h2><img class="preview-img" src="${url}"><p class="muted">Généré en ${((Date.now() - t0) / 1000).toFixed(1)} s. Prompt envoyé :<br><code>${esc(prompt)}</code></p>`, () => URL.revokeObjectURL(url));
-    renderEstimate();
+    const r = await withBusy(btn, 'Génération…', () => api('POST', '/api/preview', { provider: draft.provider, size: draft.size, style: draft.style, fps: draft.fps, scene: s, globalRefs: draft.globalRefs }));
+    openModal(`<h2>Aperçu · première image</h2><img class="preview-img" src="${r.image}" alt="Aperçu"><p class="fine">Généré en ${(r.ms / 1000).toFixed(1)} s.<br>Prompt envoyé : <code>${esc(r.prompt)}</code></p>`);
+    poll(true);
   } catch (e) { toast('Aperçu : ' + e.message, 'err'); }
-  btn.disabled = false; btn.textContent = '🔍 Aperçu (1 image test)';
 }
-
 async function launch(btn) {
-  if (!settings.apiKey) { toast('Ajoute ta clé API dans Réglages', 'err'); return showTab('settings'); }
   const bad = draft.scenes.findIndex((s) => !s.prompt.trim());
-  if (bad >= 0) return toast(`La scène #${bad + 1} n'a pas de prompt`, 'err');
-  btn.disabled = true;
+  if (bad >= 0) return toast(`La scène ${bad + 1} n'a pas de prompt`, 'err');
+  const p = providers()[draft.provider];
+  if (p && !p.hasKey) { toast(`Ajoute d'abord la clé ${p.label}`, 'err'); return showTab('settings'); }
   try {
-    const scenes = JSON.parse(JSON.stringify(draft.scenes)).map((s) => ({ name: s.name, prompt: s.prompt, motion: s.motion, endPrompt: s.endPrompt, duration: s.duration, refs: s.refs }));
-    if (draft.enrichAuto) {
-      btn.textContent = 'Enrichissement des prompts…';
-      for (const s of scenes) { try { s.prompt = await Api.enhance(s.prompt); } catch (e) { toast('Enrichissement ignoré : ' + e.message, 'err'); break; } }
-    }
-    const job = {
-      id: uid(), title: draft.title || 'Vidéo', createdAt: Date.now(), status: 'paused', fps: Math.max(12, draft.fps), size: draft.size,
-      mode: draft.mode, concurrency: draft.concurrency, style: draft.style, globalRefs: [...draft.globalRefs], scenes,
-      done: '', error: '', note: '', video: null, lastFrame: -1,
-    };
-    job.done = '0'.repeat(Engine.plan(job).length);
-    jobs.unshift(job);
-    saveJobs();
-    Engine.start(job);
-    toast(`Instance « ${job.title} » lancée (${job.done.length} images)`, 'ok');
+    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs }) => ({ name, prompt, motion, endPrompt, duration, refs })) }));
+    server.jobs.unshift(job);
+    toast(`« ${job.title} » lancée : ${job.done.length} images. Tu peux quitter la page.`, 'ok');
+    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
     showTab('jobs');
-  } finally { btn.disabled = false; btn.textContent = '🚀 Lancer la génération'; }
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 /* ---------- Instances ---------- */
 function jobCardHtml(j) {
   return `<article class="job" data-id="${j.id}">
-    <div class="thumb"><img hidden alt=""><video controls loop hidden></video><span class="empty">En attente de la 1ʳᵉ image…</span></div>
+    <div class="thumb"><img hidden alt=""><video controls loop playsinline preload="metadata" hidden></video><div class="ph">${ico('image', 'xl')}<span>En attente de la 1ʳᵉ image…</span></div></div>
     <div class="jinfo">
-      <h3><span data-r="title"></span><span class="pill" data-r="status"></span></h3>
-      <div class="muted" data-r="meta"></div>
+      <div class="jtop"><h3 data-r="title"></h3><span class="pill" data-r="status"></span></div>
+      <div class="meta" data-r="meta"></div>
       <div class="bar"><i data-r="bar"></i></div>
-      <div data-r="prog"></div>
+      <div class="prog" data-r="prog"></div>
       <div class="note" data-r="note"></div>
-      <div class="actions">
+      <div class="actions tight">
         <button class="btn sm" data-act="jobToggle" data-r="toggle"></button>
-        <button class="btn sm" data-act="jobAssemble" data-r="asm">🎬 Assembler</button>
-        <button class="btn sm primary" data-act="jobDownload" data-r="dl">⬇ Vidéo</button>
-        <button class="btn sm" data-act="jobFrames">🖼 Images</button>
-        <button class="btn sm" data-act="jobClone" title="Relancer une copie">⧉</button>
-        <button class="btn sm danger" data-act="jobDel" title="Supprimer">🗑</button>
+        <button class="btn sm" data-act="jobAssemble" data-r="asm">${ico('clapper')}Assembler</button>
+        <a class="btn sm primary" data-r="dl" download>${ico('download')}Vidéo</a>
+        <button class="btn sm" data-act="jobFrames">${ico('image')}Images</button>
+        <button class="icon-btn" data-act="jobClone" title="Relancer une copie">${ico('copy')}</button>
+        <button class="icon-btn danger" data-act="jobDel" title="Supprimer">${ico('trash')}</button>
       </div>
     </div></article>`;
 }
 const jobCard = (id) => $(`.job[data-id="${id}"]`);
 
-async function updateJobCard(j) {
+function updateJobCard(j) {
   const c = jobCard(j.id);
   if (!c) return;
   const r = (k) => $(`[data-r=${k}]`, c);
-  const n = Engine.doneCount(j), total = j.done.length;
-  const remaining = total - n;
+  const n = (j.done.match(/1/g) || []).length, total = j.done.length, remaining = total - n;
+  const label = (providers()[j.provider] || {}).label || j.provider;
   r('title').textContent = j.title;
-  const st = $('[data-r=status]', c); st.textContent = STATUS[j.status] || j.status; st.className = 'pill ' + j.status;
-  r('meta').textContent = `${j.fps} fps · ${j.size} · ${j.scenes.length} scène(s) · ${{ chain: 'chaînée', anchor: 'ancrée', none: 'indépendantes' }[j.mode]} · ${(total / j.fps).toFixed(1)} s`;
+  const st = r('status'); st.textContent = STATUS[j.status] || j.status; st.className = 'pill ' + j.status;
+  r('meta').textContent = `${label} · ${j.fps} fps · ${j.size} · ${j.scenes.length} scène(s) · ${MODE_LABEL[j.mode]} · ${(total / j.fps).toFixed(1)} s`;
   const pct = j.status === 'assembling' ? (j.assemble || 0) * 100 : (n / total) * 100;
   r('bar').style.width = pct + '%';
+  c.classList.toggle('live', j.status === 'running' || j.status === 'assembling');
   const spf = j.spf || estimate().spf;
   r('prog').textContent = j.status === 'assembling' ? `Assemblage de la vidéo… ${Math.round(pct)} %`
-    : `${n}/${total} images (${Math.round((n / total) * 100)} %)` + (j.status === 'running' && remaining ? ` · reste ~${fmtDur(remaining * spf)}` : '');
+    : `${n}/${total} images · ${Math.round(pct)} %` + (j.status === 'running' && remaining ? ` · reste ~${fmtDur(remaining * spf)}` : '');
   const note = r('note'); note.textContent = j.error || j.note || ''; note.classList.toggle('err', !!j.error);
   const t = r('toggle');
   t.hidden = j.status === 'done' || j.status === 'assembling';
-  t.textContent = j.status === 'running' ? '⏸ Pause' : j.status === 'error' ? '↻ Réessayer' : '▶ Reprendre';
-  r('asm').hidden = !n || j.status === 'assembling' || j.status === 'running';
-  r('dl').hidden = !j.video;
-  const img = $('img', c), vid = $('video', c), empty = $('.empty', c);
-  if (j.video && c.dataset.video !== String(j.video.at)) {
-    c.dataset.video = String(j.video.at);
-    const b = await DB.get(`${j.id}:video`);
-    if (b) { if (vid.src) URL.revokeObjectURL(vid.src); vid.src = URL.createObjectURL(b); vid.hidden = false; img.hidden = true; empty.hidden = true; }
-  } else if (!j.video && j.lastFrame >= 0 && c.dataset.frame !== String(j.lastFrame) && !c._loading) {
-    c._loading = true; c.dataset.frame = String(j.lastFrame);
-    const b = await DB.get(`${j.id}:f:${j.lastFrame}`);
-    if (b) { if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src); img.src = URL.createObjectURL(b); img.hidden = false; empty.hidden = true; }
-    c._loading = false;
+  t.innerHTML = j.status === 'running' ? ico('pause') + 'Pause' : j.status === 'error' ? ico('refresh') + 'Réessayer' : ico('play') + 'Reprendre';
+  r('asm').hidden = !n || j.status === 'assembling' || j.status === 'running' || (j.status === 'done' && !!j.video);
+  const dl = r('dl'); dl.hidden = !j.video; if (j.video) dl.href = `/api/jobs/${j.id}/video?dl=1`;
+  const img = $('img', c), vid = $('video', c), ph = $('.ph', c);
+  if (j.video) {
+    const v = String(j.video.at);
+    if (c.dataset.video !== v) { c.dataset.video = v; vid.poster = `/api/jobs/${j.id}/frame/${Math.max(0, j.lastFrame)}`; vid.src = `/api/jobs/${j.id}/video?v=${v}`; }
+    vid.hidden = false; img.hidden = true; ph.hidden = true;
+  } else if (j.lastFrame >= 0) {
+    if (c.dataset.frame !== String(j.lastFrame)) { c.dataset.frame = String(j.lastFrame); img.src = `/api/jobs/${j.id}/frame/${j.lastFrame}`; }
+    img.hidden = false; vid.hidden = true; ph.hidden = true;
   }
-  renderBadge();
 }
 function renderBadge() {
-  const run = jobs.filter((j) => j.status === 'running' || j.status === 'assembling').length;
+  const run = server.jobs.filter((j) => j.status === 'running' || j.status === 'assembling').length;
   const b = $('#jobsBadge'); b.hidden = !run; b.textContent = run;
-  $('#jobsSummary').textContent = `${jobs.length} instance(s) · ${run} active(s) · quota ${settings.rpm} img/min partagé`;
+  $('#jobsSummary').textContent = `${server.jobs.length} instance(s) · ${run} active(s). Les instances tournent sur le serveur, tu peux fermer cet onglet.`;
 }
 function renderJobs() {
   const box = $('#jobList');
-  $('#jobsEmpty').hidden = !!jobs.length;
-  const ids = new Set(jobs.map((j) => j.id));
+  $('#jobsEmpty').hidden = !!server.jobs.length;
+  const ids = new Set(server.jobs.map((j) => j.id));
   $$('.job', box).forEach((c) => { if (!ids.has(c.dataset.id)) c.remove(); });
-  jobs.forEach((j) => {
+  server.jobs.forEach((j) => {
     if (!jobCard(j.id)) box.insertAdjacentHTML('beforeend', jobCardHtml(j));
     updateJobCard(j);
   });
-  // ordre : plus récent d'abord
-  jobs.forEach((j) => box.appendChild(jobCard(j.id)));
+  server.jobs.forEach((j, i) => { const c = jobCard(j.id); if (box.children[i] !== c) box.insertBefore(c, box.children[i] || null); });
   renderBadge();
 }
-Engine.onChange = (j) => { if ($('#tab-jobs').classList.contains('active')) { if (!jobCard(j.id)) renderJobs(); else updateJobCard(j); } else renderBadge(); };
-
-function download(blob, name) {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-}
 async function openGallery(j) {
-  const urls = [];
-  openModal(`<h2>${esc(j.title)} – images</h2><p class="muted">Clique sur une image pour la télécharger.</p><div class="gal">${[...j.done].map((d, i) => `<a data-i="${i}" ${d === '1' ? '' : 'style="display:grid;place-items:center"'}>${d === '1' ? '' : '…'}<span>${i + 1}</span></a>`).join('')}</div>`,
-    () => urls.forEach((u) => URL.revokeObjectURL(u)));
-  const links = $$('.gal a');
-  for (let i = 0; i < links.length; i++) {
-    if (j.done[i] !== '1') continue;
-    const b = await DB.get(`${j.id}:f:${i}`);
-    if (!b || $('#modal').hidden) continue;
-    const u = URL.createObjectURL(b); urls.push(u);
-    links[i].insertAdjacentHTML('afterbegin', `<img src="${u}" loading="lazy">`);
-    links[i].href = u; links[i].download = `${slug(j.title)}-${String(i + 1).padStart(4, '0')}.png`;
-  }
+  openModal(`<h2>${esc(j.title)} · images</h2><p class="fine">Clique sur une image pour la télécharger.</p><div class="gal">${[...j.done].map((d, i) => d === '1'
+    ? `<a href="/api/jobs/${j.id}/frame/${i}?dl=1" download><img src="/api/jobs/${j.id}/frame/${i}" loading="lazy" alt=""><span>${i + 1}</span></a>`
+    : `<a class="missing"><span>${i + 1}</span>…</a>`).join('')}</div>`);
 }
-async function deleteJob(j) {
-  if (!confirm(`Supprimer « ${j.title} » et ses images ?`)) return;
-  Engine.pause(j);
-  jobs.splice(jobs.indexOf(j), 1);
-  saveJobs();
-  await DB.delPrefix(j.id + ':');
-  renderJobs();
+async function jobAction(j, action) {
+  try { Object.assign(j, await api('POST', `/api/jobs/${j.id}/${action}`)); updateJobCard(j); renderBadge(); } catch (e) { toast(e.message, 'err'); }
+  poll(true);
 }
-function cloneJob(j) {
-  const c = JSON.parse(JSON.stringify(j));
-  Object.assign(c, { id: uid(), title: j.title + ' (copie)', createdAt: Date.now(), status: 'paused', done: '0'.repeat(j.done.length), error: '', note: '', video: null, lastFrame: -1, spf: 0 });
-  jobs.unshift(c); saveJobs(); Engine.start(c); renderJobs();
-}
+const notified = new Set();
 
 /* ---------- Bibliothèque ---------- */
 function renderLibrary() {
   $('#libEmpty').hidden = !!library.length;
   $('#libList').innerHTML = library.map((l) => `
     <div class="libitem" data-id="${l.id}">
+      ${l.refs.length ? `<div class="strip">${l.refs.slice(0, 4).map((id) => `<img src="/api/assets/${id}" alt="">`).join('')}</div>` : ''}
       <h3>${esc(l.name)}</h3><p>${esc(l.prompt)}</p>
-      <div class="muted" style="margin-bottom:8px">${l.duration}s · ${l.refs.length} référence(s)</div>
-      <div class="actions"><button class="btn sm primary" data-act="libUse">＋ Au storyboard</button><button class="btn sm danger" data-act="libDel">Supprimer</button></div>
+      <div class="meta">${l.duration} s · ${l.refs.length} référence(s)</div>
+      <div class="actions tight"><button class="btn sm primary" data-act="libUse">${ico('plus')}Au storyboard</button><button class="icon-btn danger" data-act="libDel" title="Supprimer">${ico('trash')}</button></div>
     </div>`).join('');
 }
 
 /* ---------- Réglages ---------- */
-function renderSettings() {
-  $$('[data-s]').forEach((el) => { const v = settings[el.dataset.s]; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; });
-  renderKeyState();
+function field(pid, k, label, v, type = 'text', extra = '') {
+  return `<label>${label}<input data-p="${pid}" data-k="${k}" type="${type}" value="${esc(v)}" ${extra}></label>`;
 }
-function renderKeyState() { $('#keyState').textContent = settings.apiKey ? '🔑 clé enregistrée' : '⚠ pas de clé API'; }
+function renderSettings() {
+  const s = server.settings;
+  if (!s) return;
+  $('#settingsBody').innerHTML = Object.entries(s.providers).map(([id, p]) => `
+    <div class="card prov" data-pid="${id}">
+      <div class="prov-head">
+        <div><div class="card-title" style="margin:0">${esc(p.label)}</div>
+          <span class="pill ${p.hasKey ? 'done' : 'paused'}">${p.hasKey ? 'Clé configurée ' + esc(p.keyHint) + (p.keyFromEnv ? ' (variable d\'environnement)' : '') : 'Clé manquante'}</span></div>
+        <a href="${esc(p.keyUrl)}" target="_blank" rel="noopener" class="btn sm">Obtenir une clé gratuite</a>
+      </div>
+      <div class="grid">
+        <label class="wide">Clé API<input data-p="${id}" data-k="apiKey" type="password" autocomplete="off" placeholder="${p.hasKey ? 'Laisser vide pour conserver la clé actuelle' : 'Colle ta clé ici'}"></label>
+        ${field(id, 'imageModel', 'Modèle image', p.imageModel, 'text', 'placeholder="(modèle par défaut)"')}
+        ${field(id, 'editModel', 'Modèle avec références', p.editModel, 'text', 'placeholder="(même modèle)"')}
+        ${field(id, 'chatModel', 'Modèle texte (enrichissement)', p.chatModel)}
+        ${field(id, 'rpm', 'Quota : images / minute', p.rpm, 'number', 'min="1" max="600"')}
+      </div>
+      <details><summary>Avancé</summary>
+        <div class="grid">
+          ${field(id, 'baseUrl', 'URL de base de l\'API', p.baseUrl)}
+          <label>Envoi des références
+            <select data-p="${id}" data-k="refMode"><option value="field" ${p.refMode === 'field' ? 'selected' : ''}>Dans la requête JSON (champ)</option><option value="edits" ${p.refMode === 'edits' ? 'selected' : ''}>Endpoint /images/edits (multipart)</option></select></label>
+          ${field(id, 'refField', 'Champ JSON des références', p.refField)}
+          <label class="check"><input data-p="${id}" data-k="refArray" type="checkbox" ${p.refArray ? 'checked' : ''}><span>Envoyer sous forme de tableau</span></label>
+        </div>
+      </details>
+      <div class="actions">
+        <button class="btn primary" data-act="saveProv">Enregistrer</button>
+        <button class="btn" data-act="testProv">Tester la connexion</button>
+        ${p.hasKey && !p.keyFromEnv ? '<button class="btn ghost danger" data-act="clearKey">Supprimer la clé</button>' : ''}
+      </div>
+    </div>`).join('') + `
+    <div class="card">
+      <div class="card-title">Général</div>
+      <div class="grid">
+        <label>Fournisseur par défaut<select id="gDefault">${Object.entries(s.providers).map(([id, p]) => `<option value="${id}" ${s.defaultProvider === id ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select></label>
+        <label>Références max / requête<input id="gMaxRefs" type="number" min="1" max="10" value="${s.maxRefs}"></label>
+        <label class="wide">Consigne d'enrichissement des prompts<textarea id="gEnhance" rows="4">${esc(s.enhancePrompt)}</textarea></label>
+      </div>
+      <div class="actions"><button class="btn primary" data-act="saveGeneral">Enregistrer</button><button class="btn ghost danger" data-act="resetLocal">Vider le brouillon et la bibliothèque</button></div>
+    </div>`;
+}
+function provPatch(card) {
+  const pid = card.dataset.pid, o = {};
+  $$('[data-k]', card).forEach((el) => { o[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value; });
+  return { providers: { [pid]: o } };
+}
+async function saveSettings(patch, msg = 'Réglages enregistrés') {
+  server.settings = await api('PUT', '/api/settings', patch);
+  renderSettings(); renderStudio(); toast(msg, 'ok');
+}
 
 /* ---------- Modal ---------- */
-let modalCleanup = null;
-function openModal(html, cleanup) { closeModal(); $('#modalBody').innerHTML = html; $('#modal').hidden = false; modalCleanup = cleanup; }
-function closeModal() { $('#modal').hidden = true; $('#modalBody').innerHTML = ''; if (modalCleanup) { modalCleanup(); modalCleanup = null; } }
+function openModal(html) { $('#modalBody').innerHTML = html; $('#modal').hidden = false; }
+function closeModal() { $('#modal').hidden = true; $('#modalBody').innerHTML = ''; }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
-/* ---------- Actions (délégation) ---------- */
+/* ---------- Actions ---------- */
 document.addEventListener('click', async (e) => {
+  const go = e.target.closest('[data-go]');
+  if (go) { e.preventDefault(); return showTab(go.dataset.go); }
   const b = e.target.closest('[data-act]');
   if (!b) return;
   const act = b.dataset.act;
   const scene = b.closest('.scene'), si = scene ? +scene.dataset.i : -1;
-  const jobEl = b.closest('.job'), job = jobEl ? jobs.find((j) => j.id === jobEl.dataset.id) : null;
+  const jobEl = b.closest('.job'), job = jobEl ? server.jobs.find((j) => j.id === jobEl.dataset.id) : null;
   const move = (d) => { const t = si + d; if (t < 0 || t >= draft.scenes.length) return; [draft.scenes[si], draft.scenes[t]] = [draft.scenes[t], draft.scenes[si]]; saveDraft(); renderStudio(); };
-  switch (act) {
-    case 'addScene': draft.scenes.push(newScene(draft.scenes.length + 1)); saveDraft(); renderStudio(); break;
-    case 'sceneUp': move(-1); break;
-    case 'sceneDown': move(1); break;
-    case 'sceneDup': draft.scenes.splice(si + 1, 0, { ...JSON.parse(JSON.stringify(draft.scenes[si])), id: uid(), libId: null, name: draft.scenes[si].name + ' (copie)' }); saveDraft(); renderStudio(); break;
-    case 'sceneDel':
-      if (draft.scenes.length === 1) draft.scenes[0] = newScene(1); else draft.scenes.splice(si, 1);
-      saveDraft(); renderStudio(); break;
-    case 'sceneSave': {
-      const s = draft.scenes[si];
-      if (!s.prompt.trim()) return toast('Prompt vide', 'err');
-      const item = { id: s.libId || uid(), name: s.name, prompt: s.prompt, motion: s.motion, endPrompt: s.endPrompt, duration: s.duration, refs: [...s.refs] };
-      const k = library.findIndex((l) => l.id === item.id);
-      if (k >= 0) library[k] = item; else library.push(item);
-      s.libId = item.id; saveLibrary(); saveDraft(); renderStudio(); toast('Scène sauvegardée dans la bibliothèque', 'ok'); break;
+  try {
+    switch (act) {
+      case 'addScene': draft.scenes.push(newScene(draft.scenes.length + 1)); saveDraft(); renderStudio(); break;
+      case 'sceneUp': move(-1); break;
+      case 'sceneDown': move(1); break;
+      case 'sceneDup': draft.scenes.splice(si + 1, 0, { ...JSON.parse(JSON.stringify(draft.scenes[si])), id: uid(), libId: null, name: draft.scenes[si].name + ' (copie)' }); saveDraft(); renderStudio(); break;
+      case 'sceneDel': if (draft.scenes.length === 1) draft.scenes[0] = newScene(1); else draft.scenes.splice(si, 1); saveDraft(); renderStudio(); break;
+      case 'sceneSave': {
+        const s = draft.scenes[si];
+        if (!s.prompt.trim()) return toast('Prompt vide', 'err');
+        const item = { id: s.libId || uid(), name: s.name, prompt: s.prompt, motion: s.motion, endPrompt: s.endPrompt, duration: s.duration, refs: [...s.refs] };
+        const k = library.findIndex((l) => l.id === item.id);
+        if (k >= 0) library[k] = item; else library.push(item);
+        s.libId = item.id; saveLibrary(); saveDraft(); renderStudio(); toast('Scène sauvegardée dans la bibliothèque', 'ok'); break;
+      }
+      case 'enhance': enhanceScene(si, b); break;
+      case 'unenhance': { const s = draft.scenes[si]; s.prompt = s.promptOriginal; s.promptOriginal = ''; saveDraft(); renderStudio(); break; }
+      case 'rmref': { const l = refList(b.dataset.scope); l.splice(l.indexOf(b.dataset.id), 1); saveDraft(); renderStudio(); break; }
+      case 'preview': previewFrame(b); break;
+      case 'launch': launch(b); break;
+      case 'jobToggle': jobAction(job, job.status === 'running' ? 'pause' : 'resume'); break;
+      case 'jobAssemble': jobAction(job, 'assemble'); break;
+      case 'jobFrames': openGallery(job); break;
+      case 'jobClone': { const c = await api('POST', `/api/jobs/${job.id}/clone`); server.jobs.unshift(c); renderJobs(); toast('Copie lancée', 'ok'); break; }
+      case 'jobDel':
+        if (!confirm(`Supprimer « ${job.title} », ses images et sa vidéo ?`)) return;
+        await api('DELETE', `/api/jobs/${job.id}`); server.jobs = server.jobs.filter((j) => j !== job); renderJobs(); break;
+      case 'libUse': { const l = library.find((x) => x.id === b.closest('.libitem').dataset.id); draft.scenes.push({ ...JSON.parse(JSON.stringify(l)), id: uid(), libId: l.id, promptOriginal: '' }); saveDraft(); renderStudio(); toast('Ajoutée au storyboard', 'ok'); break; }
+      case 'libDel': { const id = b.closest('.libitem').dataset.id; library = library.filter((x) => x.id !== id); saveLibrary(); renderLibrary(); break; }
+      case 'closeModal': closeModal(); break;
+      case 'saveProv': await withBusy(b, 'Enregistrement…', () => saveSettings(provPatch(b.closest('.prov')))); break;
+      case 'clearKey': await saveSettings({ providers: { [b.closest('.prov').dataset.pid]: { clearKey: true } } }, 'Clé supprimée'); break;
+      case 'testProv': {
+        const card = b.closest('.prov');
+        await saveSettings(provPatch(card), 'Réglages enregistrés, test en cours…');
+        const again = $(`.prov[data-pid="${card.dataset.pid}"] [data-act=testProv]`);
+        const r = await withBusy(again, 'Test…', () => api('POST', '/api/test', { provider: card.dataset.pid }));
+        toast('Connexion OK ✔ ' + r.sample.slice(0, 60), 'ok'); break;
+      }
+      case 'saveGeneral': await saveSettings({ defaultProvider: $('#gDefault').value, maxRefs: +$('#gMaxRefs').value, enhancePrompt: $('#gEnhance').value }); break;
+      case 'resetLocal':
+        if (!confirm('Vider le brouillon et la bibliothèque de scènes de ce navigateur ?')) return;
+        draft = newDraft(); library = []; LS.set('draft', draft); LS.set('library', library); renderStudio(); renderLibrary(); toast('Brouillon et bibliothèque vidés', 'ok'); break;
     }
-    case 'enhance': enhanceScene(si, b); break;
-    case 'unenhance': { const s = draft.scenes[si]; s.prompt = s.promptOriginal; s.promptOriginal = ''; saveDraft(); renderStudio(); break; }
-    case 'rmref': { const l = refList(b.dataset.scope); l.splice(l.indexOf(b.dataset.id), 1); saveDraft(); renderStudio(); break; }
-    case 'preview': previewFrame(b); break;
-    case 'launch': launch(b); break;
-    case 'jobToggle': if (job.status === 'running') Engine.pause(job); else Engine.start(job); break;
-    case 'jobAssemble': Engine.assemble(job); break;
-    case 'jobDownload': { const blob = await DB.get(`${job.id}:video`); if (blob) download(blob, `${slug(job.title)}.${job.video.ext}`); break; }
-    case 'jobFrames': openGallery(job); break;
-    case 'jobClone': cloneJob(job); break;
-    case 'jobDel': deleteJob(job); break;
-    case 'libUse': { const l = library.find((x) => x.id === b.closest('.libitem').dataset.id); draft.scenes.push({ ...JSON.parse(JSON.stringify(l)), id: uid(), libId: l.id, promptOriginal: '' }); saveDraft(); renderStudio(); toast('Ajoutée au storyboard', 'ok'); break; }
-    case 'libDel': { const id = b.closest('.libitem').dataset.id; library = library.filter((x) => x.id !== id); saveLibrary(); renderLibrary(); break; }
-    case 'closeModal': closeModal(); break;
-    case 'testKey': {
-      b.disabled = true;
-      try { const out = await Api.enhance('a red apple'); toast('Clé OK ✔ — ' + out.slice(0, 60), 'ok'); } catch (err) { toast('Échec : ' + err.message, 'err'); }
-      b.disabled = false; break;
-    }
-    case 'wipe':
-      if (!confirm('Effacer clé, scènes, instances, images et vidéos de ce navigateur ?')) return;
-      jobs.forEach((j) => Engine.pause(j));
-      Object.keys(localStorage).filter((k) => k.startsWith('afvg.')).forEach((k) => localStorage.removeItem(k));
-      wiping = true;
-      { const rq = indexedDB.deleteDatabase('afvg'); rq.onsuccess = rq.onerror = rq.onblocked = () => location.reload(); }
-      break;
-  }
+  } catch (err) { toast(err.message, 'err'); }
 });
 
+/* ---------- Synchronisation avec le serveur ---------- */
+let polling = false;
+async function poll(once) {
+  if (polling && !once) return;
+  polling = true;
+  try {
+    const first = !server.settings;
+    const prev = new Map(server.jobs.map((j) => [j.id, j.status]));
+    const s = await api('GET', '/api/state');
+    server = s;
+    for (const j of s.jobs) {
+      if (j.status === 'done' && prev.has(j.id) && prev.get(j.id) !== 'done' && !notified.has(j.id)) {
+        notified.add(j.id);
+        toast(`« ${j.title} » est terminée`, 'ok');
+        if ('Notification' in window && Notification.permission === 'granted') new Notification('Frame Studio', { body: `« ${j.title} » est terminée` });
+      }
+    }
+    setConn(true);
+    if (first) { renderStudio(); renderSettings(); }
+    if ($('#tab-jobs').classList.contains('active')) renderJobs(); else renderBadge();
+    if ($('#tab-studio').classList.contains('active') && !first) renderEstimate();
+  } catch (e) {
+    setConn(false, e.message);
+  }
+  polling = false;
+  if (!once) setTimeout(poll, document.hidden ? 8000 : 2000);
+}
+function setConn(ok, msg) {
+  if (connected === ok) return;
+  connected = ok;
+  $('#connDot').className = 'dot ' + (ok ? 'on' : 'off');
+  $('#connText').textContent = ok ? 'Serveur connecté' : 'Serveur injoignable';
+  const bn = $('#banner'); bn.hidden = ok;
+  bn.textContent = ok ? '' : `${msg || 'Serveur injoignable'} — reconnexion automatique… (tes instances continuent de tourner côté serveur)`;
+}
+
 /* ---------- Init ---------- */
-let wiping = false;
-window.addEventListener('beforeunload', () => { if (!wiping) { LS.set('jobs', jobs); LS.set('draft', draft); } });
-renderSettings();
 renderStudio();
 renderJobs();
-Assets.gc().catch(() => {});
 const startTab = location.hash.slice(1);
 if (['studio', 'jobs', 'library', 'settings'].includes(startTab)) showTab(startTab);
+poll();
+document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(true); });

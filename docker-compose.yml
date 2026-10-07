@@ -1,0 +1,39 @@
+# Local :        docker compose up -d --build        → http://localhost:8080
+# En ligne HTTPS: DOMAIN=studio.exemple.com docker compose --profile https up -d --build
+services:
+  app:
+    build: .
+    image: frame-studio
+    restart: unless-stopped
+    environment:
+      # Protège l'accès (OBLIGATOIRE si l'app est accessible depuis Internet).
+      APP_USER: ${APP_USER:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      # Clés par défaut (optionnel : elles peuvent aussi être saisies dans Réglages).
+      AGNES_API_KEY: ${AGNES_API_KEY:-}
+      POLLINATIONS_API_KEY: ${POLLINATIONS_API_KEY:-}
+    volumes:
+      - frame-data:/data          # instances, images, vidéos, réglages (persistant)
+    # En mode HTTPS (profil), seul Caddy est exposé ; sinon l'app l'est directement.
+    ports:
+      - "${BIND:-0.0.0.0}:${PORT:-8080}:8080"
+
+  caddy:
+    profiles: ["https"]
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  frame-data:
+  caddy-data:
+  caddy-config:

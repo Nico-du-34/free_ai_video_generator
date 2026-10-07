@@ -1,4 +1,4 @@
-// Faux serveur Agnes pour tester l'app sans clé : UPSTREAM=http://127.0.0.1:9099 node server.js
+// Faux serveur d'API (Agnes/Pollinations) pour tester sans clé : node dev/mock-api.js, puis URL de base http://127.0.0.1:9099/v1 dans Réglages
 const http = require('http');
 const zlib = require('zlib');
 
@@ -33,15 +33,19 @@ function png(w, h, seed) {
 let n = 0;
 http.createServer((req, res) => {
   let body = '';
-  req.on('data', (d) => (body += d));
+  req.setEncoding('latin1'); req.on('data', (d) => (body += d));
   req.on('end', () => {
     const j = (() => { try { return JSON.parse(body); } catch { return {}; } })();
     res.setHeader('content-type', 'application/json');
     if (!/Bearer .+/.test(req.headers.authorization || '')) { res.statusCode = 401; return res.end('{"error":{"message":"no key"}}'); }
-    if (req.url.endsWith('/images/generations')) {
+    const edits = req.url.endsWith('/images/edits');
+    if (req.url.endsWith('/images/generations') || edits) {
       n++;
-      console.log('image', n, j.size, 'refs:', Array.isArray(j.image) ? j.image.length : j.image ? 1 : 0, '|', (j.prompt || '').slice(0, 70));
-      const [w, h] = (j.size || '320x180').split('x').map((v) => Math.round(+v / 4));
+      const size = edits ? (/name="size"\r\n\r\n([^\r]+)/.exec(body) || [])[1] : j.size;
+      const refs = edits ? (body.match(/name="image(\[\])?"/g) || []).length : Array.isArray(j.image) ? j.image.length : j.image ? 1 : 0;
+      const prompt = edits ? (/name="prompt"\r\n\r\n([^\r]+)/.exec(body) || [])[1] : j.prompt;
+      console.log(edits ? 'edit' : 'image', n, size, 'refs:', refs, '|', (prompt || '').slice(0, 70));
+      const [w, h] = (size || '320x180').split('x').map((v) => Math.round(+v / 4));
       return setTimeout(() => res.end(JSON.stringify({ data: [{ b64_json: png(w, h, n).toString('base64') }] })), 300);
     }
     if (req.url.endsWith('/chat/completions')) {

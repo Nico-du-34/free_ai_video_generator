@@ -4,8 +4,8 @@
   "description": "Génère des vidéos image par image avec l'API gratuite Agnes AI",
   "private": true,
   "scripts": {
-    "start": "node server.js",
+    "start": "node server/index.js",
     "mock": "node dev/mock-api.js"
   },
-  "engines": { "node": ">=16" }
+  "engines": { "node": ">=20.3" }
 }
