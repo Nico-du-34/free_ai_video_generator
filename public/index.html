@@ -52,9 +52,35 @@
 
     <!-- STUDIO -->
     <section id="tab-studio" class="tab active">
-      <header class="page-head"><div><h1>Studio</h1><p>Compose ton storyboard, estime le temps, puis lance — la génération continue même si tu fermes l'onglet.</p></div></header>
+      <header class="page-head row"><div><h1>Studio</h1><p>Décris ta vidéo, choisis sa durée, lance. La génération continue même si tu fermes l'onglet.</p></div>
+        <div class="seg" id="modeSeg" role="tablist"><button data-mode="simple">Simple</button><button data-mode="advanced">Avancé</button></div></header>
       <div class="studio">
         <div class="col-main">
+          <div id="simpleView">
+            <div id="keyPrompt" class="card keycard" hidden></div>
+            <div class="card">
+              <label class="big">Décris ta vidéo
+                <textarea id="sPrompt" rows="4" maxlength="4000" placeholder="Ex : Un astronaute marche sur la lune pendant que la Terre se lève derrière lui"></textarea>
+              </label>
+              <div class="ideas" id="ideas"></div>
+              <div class="actions tight">
+                <button class="btn sm" data-act="sEnhance"><svg class="i"><use href="#i-sparkles"/></svg>Améliorer ma description</button>
+                <label class="check inline"><input data-d="enrichAuto" type="checkbox"><span>Améliorer automatiquement au lancement</span></label>
+              </div>
+              <p class="fine" id="multiNote" hidden></p>
+            </div>
+            <div class="card">
+              <div class="opt-group"><div class="opt-title">Durée de la vidéo</div>
+                <div class="chips"><span id="durChips" class="chips"></span>
+                  <span class="custom"><input id="sDur" type="number" min="1" max="300" step="1" aria-label="Durée en secondes"><em>secondes</em></span></div>
+                <small id="durHint"></small></div>
+              <div class="opt-group"><div class="opt-title">Format</div><div class="chips" id="sizeChips"></div></div>
+              <div class="opt-group"><div class="opt-title">Fluidité</div><div class="chips" id="fpsChips"></div></div>
+              <div class="opt-group"><div class="opt-title">IA utilisée</div><div class="chips" id="provChips"></div></div>
+              <div class="opt-group"><div class="opt-title">Images de référence <span class="opt">optionnel — personnage, décor, style</span></div><div id="sRefs"></div></div>
+            </div>
+          </div>
+          <div id="advView">
           <div class="card">
             <div class="card-title">Vidéo</div>
             <div class="grid">
@@ -63,6 +89,7 @@
                 <select data-d="provider"></select>
                 <small id="providerHint"></small>
               </label>
+              <label>Durée totale (s)<input id="totalDur" type="number" min="1" max="600" step="1"><small>répartie sur les scènes</small></label>
               <label>Images par seconde<input data-d="fps" type="number" min="12" max="60" step="1"><small>minimum 12</small></label>
               <label>Format des images
                 <select data-d="size">
@@ -97,6 +124,7 @@
             </div>
           </div>
           <div id="scenes"></div>
+          </div>
         </div>
 
         <aside class="col-side">

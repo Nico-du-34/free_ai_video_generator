@@ -164,3 +164,29 @@ details{margin-top:14px}summary{cursor:pointer;color:var(--muted);font-weight:60
   .jobs{grid-template-columns:1fr}
   .tools .icon-btn:nth-child(-n+2){display:none}
 }
+
+/* mode simple */
+.page-head.row{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.seg{display:inline-flex;background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg button{border:0;background:none;color:var(--muted);padding:7px 16px;border-radius:8px;cursor:pointer;font:inherit;font-weight:600}
+.seg button.on{background:var(--surface);color:var(--text);box-shadow:0 1px 4px #0003}
+label.big{font-size:15px;font-weight:650;color:var(--text)}
+label.big textarea{font-size:16px;padding:14px;min-height:110px;line-height:1.5}
+.ideas{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.ideas button{border:1px solid var(--line);background:var(--surface2);color:var(--muted);border-radius:99px;padding:4px 11px;font:inherit;font-size:12px;cursor:pointer}
+.ideas button:hover{color:var(--text);border-color:var(--acc)}
+label.check.inline{margin-left:auto}
+.opt-group+.opt-group{margin-top:20px}
+.opt-title{font-weight:650;font-size:13px;margin-bottom:8px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.chip-btn{display:inline-flex;align-items:center;gap:8px;border:1.5px solid var(--line);background:var(--surface2);color:var(--text);border-radius:10px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer;transition:.12s}
+.chip-btn:hover{border-color:var(--line2)}
+.chip-btn.on{border-color:var(--acc);background:var(--acc-soft);color:var(--acc)}
+.chip-btn.off{opacity:.6}
+.chip-btn i{display:inline-block;border:1.5px solid currentColor;border-radius:3px}
+.chip-btn small{margin:0;font-weight:500}
+.custom{display:inline-flex;align-items:center;gap:8px;margin-left:4px}
+.custom input{width:84px;margin:0;text-align:center}.custom em{color:var(--muted);font-style:normal;font-size:13px}
+.keycard{border-color:#f59e0b66;background:#f59e0b0d}
+.keycard h3{font-size:15px;margin-bottom:6px}.keycard p{color:var(--muted);margin-bottom:12px}
+.keycard .row{display:flex;gap:8px}.keycard .row input{margin:0}

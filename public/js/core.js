@@ -23,7 +23,7 @@ const LS = {
   set(k, v) { try { localStorage.setItem('afvg.' + k, JSON.stringify(v)); return true; } catch { toast('Stockage local plein ou indisponible', 'err'); return false; } },
 };
 const newScene = (n = 1) => ({ id: uid(), libId: null, name: 'Scène ' + n, prompt: '', promptOriginal: '', motion: '', endPrompt: '', duration: 3, refs: [] });
-const newDraft = () => ({ title: 'Ma vidéo', provider: '', fps: 12, size: '1024x576', mode: 'chain', concurrency: 2, style: '', enrichAuto: false, globalRefs: [], scenes: [newScene()] });
+const newDraft = () => ({ title: 'Ma vidéo', provider: '', fps: 12, size: '1024x576', mode: 'chain', concurrency: 2, style: '', enrichAuto: true, simple: true, globalRefs: [], scenes: [newScene()] });
 let draft = Object.assign(newDraft(), LS.get('draft', {}));
 if (!Array.isArray(draft.scenes) || !draft.scenes.length) draft.scenes = [newScene()];
 let library = LS.get('library', []);

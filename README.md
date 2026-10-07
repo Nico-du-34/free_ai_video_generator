@@ -8,7 +8,7 @@ docker compose up -d --build
 # → http://localhost:8080
 ```
 1. Onglet **Réglages** : colle ta clé gratuite ([Agnes](https://platform.agnes-ai.com) et/ou [Pollinations](https://enter.pollinations.ai)).
-2. **Studio** : scènes (prompt, mouvement, état final, durée, images de référence), fps (**min 12**), estimation du temps, aperçu d'1 image, puis **Lancer**.
+2. **Studio, mode Simple** : écris une description (ou clique une idée), choisis la **durée** (3 s → 1 min, ou n'importe quel nombre de secondes), le format, la fluidité (**min 12 img/s**), puis **Lancer**. Pas de clé ? Un champ te permet de la coller directement. Le mode **Avancé** ajoute le storyboard multi-scènes (prompt, mouvement, état final, références par scène) et la durée totale répartie sur les scènes.
 3. **Instances** : chaque lancement est indépendant (pause/reprise, aperçu live, vidéo, images, copie). Plusieurs en parallèle, quota partagé par fournisseur.
 
 Sans Docker : Node ≥ 22 + ffmpeg, puis `npm start`.

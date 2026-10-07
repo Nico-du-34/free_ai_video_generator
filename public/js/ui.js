@@ -58,6 +58,53 @@ function ensureProvider() {
 }
 const sceneFrames = (s) => Math.max(1, Math.round((+s.duration || 0) * draft.fps));
 
+
+const IDEAS = ['Un astronaute marche sur la lune', 'Un dragon survole un village médiéval au lever du soleil', 'Une voiture de sport roule dans une ville néon sous la pluie', 'Un chat joue avec une pelote de laine, style dessin animé', 'Des vagues sur une plage tropicale au coucher du soleil', 'Une fleur qui s\'ouvre en accéléré'];
+const DURS = [3, 5, 10, 20, 30, 60];
+const SIZES = [['1024x576', '16:9', 'Paysage', [30, 17]], ['576x1024', '9:16', 'Vertical', [17, 30]], ['1024x1024', '1:1', 'Carré', [22, 22]]];
+const totalDur = () => draft.scenes.reduce((a, s) => a + (+s.duration || 0), 0);
+function setTotal(sec) {
+  sec = clamp(Math.round(+sec) || 1, 1, 600);
+  const sc = draft.scenes, S = totalDur();
+  if (sc.length === 1) sc[0].duration = sec;
+  else {
+    let acc = 0;
+    sc.forEach((s, i) => {
+      if (i === sc.length - 1) s.duration = Math.max(0.5, Math.round((sec - acc) * 2) / 2);
+      else { s.duration = Math.max(0.5, Math.round((S ? s.duration / S : 1 / sc.length) * sec * 2) / 2); acc += s.duration; }
+    });
+  }
+  saveDraft(); renderStudio();
+}
+const chip = (key, val, html, on, extra = '') => `<button class="chip-btn ${on ? 'on' : ''} ${extra}" data-chip="${key}" data-val="${esc(val)}">${html}</button>`;
+function renderSimple() {
+  $$('#modeSeg button').forEach((b) => b.classList.toggle('on', (b.dataset.mode === 'simple') === !!draft.simple));
+  $('#simpleView').hidden = !draft.simple; $('#advView').hidden = !!draft.simple;
+  const multi = draft.scenes.length > 1, sp = $('#sPrompt');
+  sp.disabled = multi;
+  sp.placeholder = multi ? 'Plusieurs scènes : modifie-les en mode Avancé' : sp.placeholder;
+  if (document.activeElement !== sp) sp.value = multi ? '' : draft.scenes[0].prompt;
+  const mn = $('#multiNote'); mn.hidden = !multi;
+  mn.innerHTML = multi ? `Ton storyboard contient ${draft.scenes.length} scènes. <a href="#" data-mode-link="advanced">Les modifier en mode Avancé</a> — la durée choisie ci-dessous est répartie entre elles.` : '';
+  $('#ideas').innerHTML = multi ? '' : IDEAS.map((t) => `<button data-idea="${esc(t)}">${esc(t)}</button>`).join('');
+  $('#durChips').innerHTML = DURS.map((v) => chip('dur', v, v < 60 ? v + ' s' : '1 min', false)).join('');
+  $('#sizeChips').innerHTML = SIZES.map(([v, r, l, [w, h]]) => chip('size', v, `<i style="width:${w}px;height:${h}px"></i>${l} <small>${r}</small>`, draft.size === v)).join('');
+  $('#fpsChips').innerHTML = [[12, 'Standard · 12 img/s'], [18, 'Fluide · 18 img/s'], [24, 'Cinéma · 24 img/s']].map(([v, l]) => chip('fps', v, l, draft.fps === v)).join('');
+  $('#provChips').innerHTML = Object.entries(providers()).map(([id, p]) => chip('prov', id, esc(p.label) + (p.hasKey ? '' : ' <small>clé à ajouter</small>'), draft.provider === id)).join('');
+  $('#sRefs').innerHTML = refsHtml(draft.globalRefs, 'global');
+  const p = providers()[draft.provider], kp = $('#keyPrompt');
+  kp.hidden = !p || p.hasKey;
+  if (p && !p.hasKey) kp.innerHTML = `<h3>Dernière étape : ta clé gratuite ${esc(p.label)}</h3><p>1. <a href="${esc(p.keyUrl)}" target="_blank" rel="noopener">Crée ta clé gratuite ici</a> &nbsp;2. Colle-la ci-dessous, c'est tout. Elle est gardée sur ton serveur.</p><div class="row"><input id="quickKey" type="password" autocomplete="off" placeholder="Colle ta clé API ici"><button class="btn primary" data-act="quickKey">Enregistrer</button></div>`;
+  renderDurUi();
+}
+function renderDurUi() {
+  const t = totalDur(), frames = draft.scenes.reduce((a, s) => a + sceneFrames(s), 0);
+  $$('#durChips [data-chip=dur]').forEach((b) => b.classList.toggle('on', +b.dataset.val === t));
+  const sd = $('#sDur'); if (document.activeElement !== sd) sd.value = +t.toFixed(1);
+  const td = $('#totalDur'); if (td && document.activeElement !== td) td.value = +t.toFixed(1);
+  $('#durHint').textContent = `${frames} images à générer (${draft.fps} images par seconde).`;
+}
+
 function renderStudio() {
   ensureProvider();
   const sel = $('[data-d=provider]');
@@ -90,12 +137,13 @@ function renderStudio() {
       <div class="three">
         <label>Mouvement / action <span class="opt">optionnel</span><input type="text" data-f="motion" value="${esc(s.motion)}" placeholder="ex : la caméra avance lentement"></label>
         <label>État final <span class="opt">optionnel</span><input type="text" data-f="endPrompt" value="${esc(s.endPrompt)}" placeholder="ex : le soleil se couche"></label>
-        <label>Durée (s)<input type="number" data-f="duration" min="0.5" max="60" step="0.5" value="${s.duration}"></label>
+        <label>Durée (s)<input type="number" data-f="duration" min="0.5" max="600" step="0.5" value="${s.duration}"></label>
       </div>
       ${refsHtml(s.refs, i)}
     </div>`).join('');
   $('#libPick').innerHTML = '<option value="">Ajouter depuis la bibliothèque…</option>' + library.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
   renderProviderHint();
+  renderSimple();
   renderEstimate();
 }
 function renderProviderHint() {
@@ -129,13 +177,16 @@ function renderEstimate() {
     </dl>
     <p class="fine">${e.measured ? `Latence mesurée : ${e.lat.toFixed(1)} s/image.` : 'Latence par défaut (8 s) — lance un aperçu pour la mesurer.'}
       Limité par ${e.quotaBound ? `le quota (${e.rpm} img/min${e.running ? `, partagé avec ${e.running} instance(s)` : ''})` : 'la latence de l\'API'}.</p>
+    ${e.frames > 5000 ? '<p class="note warn">Plus de 5 000 images : impossible. Réduis la durée ou les images par seconde.</p>' : ''}
     ${e.frames > 1500 ? '<p class="note warn">Plus de 1 500 images : attention aux limites quotidiennes du fournisseur.</p>' : ''}
     ${draft.mode === 'chain' && e.frames > 120 ? '<p class="note warn">Mode chaîné = séquentiel. « Ancrée » + parallèle va plus vite.</p>' : ''}`;
+  renderDurUi();
   $$('.scene').forEach((el) => { $('[data-frames]', el).textContent = sceneFrames(draft.scenes[+el.dataset.i]) + ' images'; });
 }
 
 document.addEventListener('input', (e) => {
   const el = e.target;
+  if (el.id === 'sPrompt') { draft.scenes[0].prompt = el.value; saveDraft(); return; }
   if (el.dataset.d) {
     const k = el.dataset.d;
     draft[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value;
@@ -149,9 +200,10 @@ document.addEventListener('input', (e) => {
 });
 document.addEventListener('change', (e) => {
   const el = e.target;
+  if (el.id === 'sDur' || el.id === 'totalDur') setTotal(el.value);
   if (el.dataset.d === 'fps') { draft.fps = clamp(Math.round(+el.value) || 12, 12, 60); el.value = draft.fps; saveDraft(); renderEstimate(); }
   if (el.dataset.d === 'concurrency') { draft.concurrency = clamp(Math.round(+el.value) || 1, 1, 6); el.value = draft.concurrency; saveDraft(); renderEstimate(); }
-  if (el.dataset.f === 'duration') { const s = draft.scenes[+el.closest('.scene').dataset.i]; s.duration = clamp(+el.value || 1, 0.5, 60); el.value = s.duration; saveDraft(); renderEstimate(); }
+  if (el.dataset.f === 'duration') { const s = draft.scenes[+el.closest('.scene').dataset.i]; s.duration = clamp(+el.value || 1, 0.5, 600); el.value = s.duration; saveDraft(); renderEstimate(); }
   if (el.id === 'libPick' && el.value) {
     const l = library.find((x) => x.id === el.value);
     if (l) { draft.scenes.push({ ...JSON.parse(JSON.stringify(l)), id: uid(), libId: l.id, promptOriginal: '' }); saveDraft(); renderStudio(); }
@@ -188,7 +240,7 @@ async function launch(btn) {
   const p = providers()[draft.provider];
   if (p && !p.hasKey) { toast(`Ajoute d'abord la clé ${p.label}`, 'err'); return showTab('settings'); }
   try {
-    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs }) => ({ name, prompt, motion, endPrompt, duration, refs })) }));
+    const job = await withBusy(btn, 'Lancement…', () => api('POST', '/api/jobs', { ...draft, title: (!draft.title || draft.title === 'Ma vidéo') ? draft.scenes[0].prompt.trim().slice(0, 50) : draft.title, scenes: draft.scenes.map(({ name, prompt, motion, endPrompt, duration, refs }) => ({ name, prompt, motion, endPrompt, duration, refs })) }));
     server.jobs.unshift(job);
     toast(`« ${job.title} » lancée : ${job.done.length} images. Tu peux quitter la page.`, 'ok');
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -355,6 +407,21 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal
 document.addEventListener('click', async (e) => {
   const go = e.target.closest('[data-go]');
   if (go) { e.preventDefault(); return showTab(go.dataset.go); }
+  const ml = e.target.closest('[data-mode-link]');
+  if (ml) { e.preventDefault(); draft.simple = false; saveDraft(); return renderStudio(); }
+  const md = e.target.closest('#modeSeg button');
+  if (md) { draft.simple = md.dataset.mode === 'simple'; saveDraft(); return renderStudio(); }
+  const idea = e.target.closest('[data-idea]');
+  if (idea) { draft.scenes[0].prompt = idea.dataset.idea; draft.scenes[0].promptOriginal = ''; saveDraft(); return renderStudio(); }
+  const ch = e.target.closest('[data-chip]');
+  if (ch) {
+    const v = ch.dataset.val;
+    if (ch.dataset.chip === 'dur') return setTotal(+v);
+    if (ch.dataset.chip === 'size') draft.size = v;
+    if (ch.dataset.chip === 'fps') draft.fps = +v;
+    if (ch.dataset.chip === 'prov') draft.provider = v;
+    saveDraft(); return renderStudio();
+  }
   const b = e.target.closest('[data-act]');
   if (!b) return;
   const act = b.dataset.act;
@@ -380,6 +447,13 @@ document.addEventListener('click', async (e) => {
       case 'unenhance': { const s = draft.scenes[si]; s.prompt = s.promptOriginal; s.promptOriginal = ''; saveDraft(); renderStudio(); break; }
       case 'rmref': { const l = refList(b.dataset.scope); l.splice(l.indexOf(b.dataset.id), 1); saveDraft(); renderStudio(); break; }
       case 'preview': previewFrame(b); break;
+      case 'sEnhance': enhanceScene(0, b); break;
+      case 'quickKey': {
+        const key = $('#quickKey').value.trim();
+        if (!key) return toast('Colle ta clé API', 'err');
+        await withBusy(b, 'Enregistrement…', () => saveSettings({ providers: { [draft.provider]: { apiKey: key } } }, 'Clé enregistrée'));
+        break;
+      }
       case 'launch': launch(b); break;
       case 'jobToggle': jobAction(job, job.status === 'running' ? 'pause' : 'resume'); break;
       case 'jobAssemble': jobAction(job, 'assemble'); break;

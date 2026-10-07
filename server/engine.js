@@ -61,12 +61,12 @@ function createJob(spec) {
     scenes: spec.scenes.map((s, i) => {
       const prompt = str(s.prompt, 4000).trim();
       if (!prompt) throw httpError(400, `La scène #${i + 1} n'a pas de prompt`);
-      return { name: str(s.name, 80) || 'Scène ' + (i + 1), prompt, motion: str(s.motion, 500).trim(), endPrompt: str(s.endPrompt, 500).trim(), duration: clamp(+s.duration || 3, 0.5, 120), refs: validRefs(s.refs) };
+      return { name: str(s.name, 80) || 'Scène ' + (i + 1), prompt, motion: str(s.motion, 500).trim(), endPrompt: str(s.endPrompt, 500).trim(), duration: clamp(+s.duration || 3, 0.5, 600), refs: validRefs(s.refs) };
     }),
     done: '', error: '', note: '', video: null, lastFrame: -1, spf: 0, assemble: 0,
   };
   const total = plan(job).length;
-  if (total > 5000) throw httpError(400, `Trop d'images (${total}, max 5000)`);
+  if (total > 5000) throw httpError(400, `Trop d'images (${total}, max 5000) : réduis la durée ou les images/seconde`);
   job.done = '0'.repeat(total);
   fs.mkdirSync(framesDir(job.id), { recursive: true });
   jobs.set(job.id, job);
